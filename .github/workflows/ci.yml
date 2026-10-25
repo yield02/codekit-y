@@ -36,7 +36,10 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          npx vitest run --reporter=default --reporter=github-actions 2>&1 | tee vitest.log
+          # Windows runners are slow at spawning git: run test files one at a time so long synchronous
+          # git sequences in parallel workers do not starve vitest's worker RPC ("Timeout calling onTaskUpdate").
+          extra=""; if [ "$RUNNER_OS" = "Windows" ]; then extra="--no-file-parallelism"; fi
+          npx vitest run $extra --reporter=default --reporter=github-actions 2>&1 | tee vitest.log
       - name: CLI smoke test
         if: runner.os != 'Windows'
         shell: bash

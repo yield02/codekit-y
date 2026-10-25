@@ -45,7 +45,9 @@ hook() { printf '%s' "$1" | node "$K/codemap.js" hook pre-tool-use; }
 hook "{\"cwd\":\"$T/src\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git push origin feature/x\"}}" | grep -q '"permissionDecision":"deny"' || fail "git push not denied"
 hook "{\"cwd\":\"$T/src\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$T/src/CLAUDE.md\"}}" | grep -q '"permissionDecision":"deny"' || fail "CLAUDE.md write not denied"
 hook "{\"cwd\":\"$T/src\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir -p docs/plans && echo x > docs/plans/p.md\"}}" | grep -q deny || fail "docs/plans write not denied"
-[ -z "$(hook "{\"cwd\":\"$T/src\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$T/src/src/b.ts\"}}")" ] || fail "normal write denied"
+# (output captured first: macOS ships bash 3.2, which mis-parses nested quotes inside "$( )")
+normal=$(hook "{\"cwd\":\"$T/src\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$T/src/src/b.ts\"}}")
+[ -z "$normal" ] || fail "normal write denied: $normal"
 
 step "pre-push hook: agent push rejected, developer push accepted"
 if CLAUDECODE=1 git -C "$T/src" push -q origin feature/x 2>"$T/push.err"; then fail "agent push went through"; fi
