@@ -11,7 +11,8 @@ import { withCorrelation } from "../core/logger.js";
 import { formatReportMarkdown, projectReport } from "../core/report.js";
 import { manualMerge, setParent, sync } from "../core/sync.js";
 import { writeView } from "../core/view.js";
-import { fail, print, readStdinJson, requireWorkspace } from "./shared.js";
+import type { Workspace } from "../core/workspace.js";
+import { fail, print, readStdinJson, requireWorkspace, requireWorkspaces } from "./shared.js";
 
 const program = new Command("codemap")
   .description("Per-branch codebase map stored outside the source repo")
@@ -19,6 +20,8 @@ const program = new Command("codemap")
   .option("--json", "machine-readable output", false);
 
 const ws = () => requireWorkspace(program.opts().repo as string);
+/** One repo, or every registered repo of a parent folder (Transfer/{Core,Admin,…}). */
+const workspaces = () => requireWorkspaces(program.opts().repo as string);
 const json = () => program.opts().json as boolean;
 
 program
@@ -27,20 +30,22 @@ program
   .argument("[paths...]", "files to check")
   .option("--all", "list every missing file", false)
   .action((paths: string[], opts: { all: boolean }) => {
-    const w = ws();
-    const targets = paths.length ? paths : w.source.listFiles();
-    const entries = lookup(w, targets).filter((e) => e.status !== "excluded");
-    const missing = entries.filter((e) => e.status === "missing");
-    const stale = entries.filter((e) => e.status === "stale");
-    const ok = entries.filter((e) => e.status === "ok");
-    if (json()) return print({ branch: w.branch, ok: ok.length, missing: missing.map((e) => e.path), stale: stale.map((e) => ({ path: e.path, reason: e.reason })) }, true);
-    const lines = [
-      `Project ${w.project.name} · branch ${w.branch} · ${w.store.kind} store`,
-      `ok ${ok.length} · missing ${missing.length} · stale ${stale.length}`,
-      ...stale.map((e) => `  stale    ${e.path} (${e.reason})`),
-      ...(opts.all || paths.length ? missing : missing.slice(0, 15)).map((e) => `  missing  ${e.path}`),
-    ];
-    if (!opts.all && !paths.length && missing.length > 15) lines.push(`  …${missing.length - 15} more (use --all)`);
+    const results = workspaces().map((w) => {
+      const targets = paths.length ? paths : w.source.listFiles();
+      const entries = lookup(w, targets).filter((e) => e.status !== "excluded" && e.status !== "not-found");
+      return { w, ok: entries.filter((e) => e.status === "ok"), missing: entries.filter((e) => e.status === "missing"), stale: entries.filter((e) => e.status === "stale") };
+    });
+    if (json()) return print(results.map(({ w, ok, missing, stale }) => ({ repo: w.repo.name, branch: w.branch, ok: ok.length, missing: missing.map((e) => e.path), stale: stale.map((e) => ({ path: e.path, reason: e.reason })) })), true);
+    const lines: string[] = [];
+    for (const { w, ok, missing, stale } of results) {
+      lines.push(
+        `${lines.length ? "\n" : ""}Project ${w.project.name} · repo ${w.repo.name} · branch ${w.branch} · ${w.store.kind} store`,
+        `ok ${ok.length} · missing ${missing.length} · stale ${stale.length}`,
+        ...stale.map((e) => `  stale    ${e.path} (${e.reason})`),
+        ...(opts.all || paths.length ? missing : missing.slice(0, 15)).map((e) => `  missing  ${e.path}`),
+      );
+      if (!opts.all && !paths.length && missing.length > 15) lines.push(`  …${missing.length - 15} more (use --all)`);
+    }
     print(lines.join("\n"), false);
   });
 
@@ -62,23 +67,25 @@ program
   .description("Detect new branches, syncs and merges (incl. squash PR merges on GitHub), and update maps")
   .option("--no-github", "skip the GitHub PR check")
   .action(async (opts: { github: boolean }) => {
-    const w = ws();
-    const report = withCorrelation(undefined, () => sync(w));
-    if (opts.github) {
-      const prs = await detectPrMerges(w, { force: true });
-      for (const m of prs.merged) report.merged.push({ branch: m.branch, into: m.into, commit: `PR #${m.pr}`, result: m.result });
-      if (prs.skipped && !json()) process.stderr.write(`github: ${prs.skipped}
-`);
-    }
-    if (json()) return print(report, true);
-    const lines = [`branch ${report.branch}`];
-    if (report.created) lines.push(`created map from ${report.created.parent ?? "(root)"}`);
-    for (const s of report.synced) lines.push(`synced from ${s.from}: ${s.result.changed} files, ${s.result.markedStale.length} stale`);
-    for (const m of report.merged) lines.push(`merged ${m.branch} into ${m.into}: ${m.result.changed} files, ${m.result.markedStale.length} stale`);
-    for (const a of report.archived) lines.push(`archived ${a}`);
-    if (lines.length === 1) lines.push("up to date");
-    print(lines.join("\n"), false);
+    for (const w of workspaces()) await syncOne(w, opts.github);
   });
+
+async function syncOne(w: Workspace, github: boolean): Promise<void> {
+  const report = withCorrelation(undefined, () => sync(w));
+  if (github) {
+    const prs = await detectPrMerges(w, { force: true });
+    for (const m of prs.merged) report.merged.push({ branch: m.branch, into: m.into, commit: `PR #${m.pr}`, result: m.result });
+    if (prs.skipped && !json()) process.stderr.write(`github (${w.repo.name}): ${prs.skipped}\n`);
+  }
+  if (json()) return print({ repo: w.repo.name, ...report }, true);
+  const lines = [`repo ${w.repo.name} · branch ${report.branch}`];
+  if (report.created) lines.push(`created map from ${report.created.parent ?? "(root)"}`);
+  for (const s of report.synced) lines.push(`synced from ${s.from}: ${s.result.changed} files, ${s.result.markedStale.length} stale`);
+  for (const m of report.merged) lines.push(`merged ${m.branch} into ${m.into}: ${m.result.changed} files, ${m.result.markedStale.length} stale`);
+  for (const a of report.archived) lines.push(`archived ${a}`);
+  if (lines.length === 1) lines.push("up to date");
+  print(lines.join("\n"), false);
+}
 
 program
   .command("index")
@@ -92,8 +99,9 @@ program
   .command("search")
   .argument("<query>")
   .description("Search maps by tag, path, dependency or text")
-  .action((query: string) => {
-    const hits = search(ws(), query);
+  .option("--project", "search every repo/service of the project", false)
+  .action((query: string, opts: { project: boolean }) => {
+    const hits = search(ws(), query, 20, opts.project ? "project" : "repo");
     print(json() ? hits : hits.map((h) => `${h.path}  [${h.tags.join(",")}]${h.stale ? " (stale)" : ""}`).join("\n") || "no matches", json());
   });
 
@@ -125,8 +133,9 @@ program
   .command("view")
   .description("Generate a static HTML viewer for the current branch's map (in ~/.codekit/cache)")
   .option("--open", "open it in the default browser", false)
-  .action((opts: { open: boolean }) => {
-    const file = writeView(ws());
+  .option("--project", "all services (repos) of the project in one view", false)
+  .action((opts: { open: boolean; project: boolean }) => {
+    const file = writeView(ws(), opts.project ? "project" : "repo");
     print(file, false);
     if (opts.open) {
       const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", file]] : process.platform === "darwin" ? ["open", [file]] : ["xdg-open", [file]];

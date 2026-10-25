@@ -1,5 +1,6 @@
 # Knowledge store settings for project "{{project}}".
-# Shared by every member; edit and commit (git backend) or save (folder backend).
+# ONE store per project: shared by every member and by every repo/service of the project
+# (e.g. core, product, ...). Edit and commit (git backend) or save (folder backend).
 project: {{project}}
 defaultBranch: {{defaultBranch}}
 
@@ -48,3 +49,15 @@ github:
 # The guard cannot be turned off. Only MCP tools listed here are exempt (e.g. issue comments).
 guard:
   allowMcpTools: []
+
+# Repos (services) of this project. `codekit init` adds each repo the first time it is
+# registered, so every developer uses the same names. Optional per-repo overrides:
+#   defaultBranch, include, exclude (added to the list above), description (shown to agents).
+# repos:
+#   core:
+#     remote: github.com/abc/abc-core
+#     description: Users, auth and shared domain
+#   product:
+#     remote: github.com/abc/abc-product
+#     defaultBranch: develop
+#     exclude: ["**/generated/**"]

@@ -37,6 +37,15 @@ Gotchas, invariants, surprising behavior, TODOs.
 - Fill `dependsOn` with the project files it relies on, and `tags` with domain tags (e.g. `auth`, `payment`).
 - The server computes `sourceHash`, author and branch; do not write frontmatter yourself.
 
+## 2.1 Multi-repo projects (microservices)
+All repos of the project share this knowledge store. Each repo has its own maps and branches.
+- Read another service's file map with `codemap_lookup("<repo>:<path>")`, e.g. `core:src/api/user.controller.ts`, instead of guessing its API.
+- Search every service with `codemap_search` and `scope: "project"`.
+- In `dependsOn`, reference other services as `<repo>:<path>`.
+- Keep this service's summary current with `service_write` (sections: Purpose, Exposes, Consumes, Data owned, Notes). Other agents read it through `service_list` and in their session context.
+- A change that crosses services (an API contract or an event) belongs in the plan for every repo it touches. Each repo is still edited, committed and pushed separately, and the developer does the pushing.
+- When the tool is opened on a parent folder that holds several repos (e.g. `Transfer/` with `Core/` and `Admin/`), pass paths relative to that folder (`Core/src/x.ts`) or as `<repo>:<path>`. Tools without a path (`plan_save`, `service_write`, `logging_detect`) take `repo`. Commits happen inside each repo folder.
+
 ## 3. Plan with Superpowers
 - Exploring code: map lookup → `brainstorming`.
 - New feature / change: `brainstorming` → `writing-plans` → `executing-plans` or `subagent-driven-development`, with `test-driven-development`.

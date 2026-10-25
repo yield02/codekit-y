@@ -71,7 +71,7 @@ export function projectReport(ws: Workspace, branches?: string[]): ProjectReport
     ? branches
     : ws.store.listBranches().filter((b) => readLineage(ws.store, b)?.status !== "archived");
   const sorted = [...names].sort((a, b) => (a === ws.config.defaultBranch ? -1 : b === ws.config.defaultBranch ? 1 : a.localeCompare(b)));
-  return { project: ws.project.name, generatedAt: new Date().toISOString(), branches: sorted.map((b) => branchReport(ws, b)) };
+  return { project: `${ws.project.name}/${ws.repo.name}`, generatedAt: new Date().toISOString(), branches: sorted.map((b) => branchReport(ws, b)) };
 }
 
 export function formatReportMarkdown(report: ProjectReport, detailLimit = 15): string {

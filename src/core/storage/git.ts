@@ -8,9 +8,9 @@ import type { Snapshot, StorageAdapter } from "./types.js";
 const CONFIG_BRANCH = "_config";
 
 /**
- * Separate git repo backend (`<project>-codemap`):
- *   branch `_config`            shared config area, checked out in `<dir>/repo`
- *   branch `map/<normalized>`   one per source branch, each in its own worktree `<dir>/wt/<normalized>`
+ * Separate git repo backend (`<project>-codemap`), ONE per project, shared by all of its repos:
+ *   branch `_config`                   shared config area, checked out in `<dir>/repo`
+ *   branch `maps/<repo>/<normalized>`  one per source repo + branch, each in its own worktree `<dir>/wt/<repo>/<normalized>`
  *
  * Every write is committed and pushed immediately so teammates (and tools without
  * a Stop hook, like Cursor/Copilot) never hold unpushed maps.
@@ -21,11 +21,23 @@ export class GitStorage implements StorageAdapter {
   private readonly wtDir: string;
 
   constructor(
-    dir: string,
+    private readonly dir: string,
     private readonly url: string | undefined,
+    /** Source repo whose branches this instance serves; omit for config-only use. */
+    readonly repo?: string,
   ) {
     this.repoDir = join(dir, "repo");
-    this.wtDir = join(dir, "wt");
+    this.wtDir = join(dir, "wt", repo ?? "_");
+  }
+
+  forRepo(repo: string): GitStorage {
+    return new GitStorage(this.dir, this.url, repo);
+  }
+
+  listRepos(): string[] {
+    this.ensureCloned();
+    const refs = tryGit(["for-each-ref", "--format=%(refname)", "refs/heads/maps/", "refs/remotes/origin/maps/"], this.repoDir) ?? "";
+    return [...new Set(refs.split("\n").filter(Boolean).map((r) => r.replace(/^refs\/(heads|remotes\/origin)\/maps\//, "").split("/")[0]!))].sort();
   }
 
   /** Clone (or init when there is no remote) and check out the config branch. */
@@ -72,10 +84,11 @@ export class GitStorage implements StorageAdapter {
 
   listBranches(): string[] {
     this.ensureCloned();
-    const refs = tryGit(["for-each-ref", "--format=%(refname)", "refs/heads/map/", "refs/remotes/origin/map/"], this.repoDir) ?? "";
+    const prefix = `maps/${this.repoKey()}/`;
+    const refs = tryGit(["for-each-ref", "--format=%(refname)", `refs/heads/${prefix}`, `refs/remotes/origin/${prefix}`], this.repoDir) ?? "";
     const names = new Set<string>();
     for (const ref of refs.split("\n").filter(Boolean)) {
-      names.add(ref.replace(/^refs\/(heads|remotes\/origin)\/map\//, ""));
+      names.add(ref.replace(/^refs\/(heads|remotes\/origin)\//, "").slice(prefix.length));
     }
     return [...names].map((n) => this.branchNameOf(n));
   }
@@ -179,8 +192,13 @@ export class GitStorage implements StorageAdapter {
     return this.hasBranch(branch) ? this.worktree(branch) : null;
   }
 
+  private repoKey(): string {
+    if (!this.repo) throw new Error("GitStorage: branch operations need a repo (use forRepo)");
+    return this.repo;
+  }
+
   private ref(branch: string): string {
-    return `map/${normalizeBranch(branch)}`;
+    return `maps/${this.repoKey()}/${normalizeBranch(branch)}`;
   }
 
   private hasLocalRef(ref: string): boolean {
@@ -217,7 +235,7 @@ export class GitStorage implements StorageAdapter {
   }
 
   private branchNameOf(normalized: string): string {
-    const ref = `map/${normalized}`;
+    const ref = `maps/${this.repoKey()}/${normalized}`;
     const at = this.hasLocalRef(ref) ? ref : `origin/${ref}`;
     const lineage = showFile(this.repoDir, `${at}:lineage/${normalized}.json`);
     if (lineage) {

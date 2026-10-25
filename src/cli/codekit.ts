@@ -9,7 +9,7 @@ import { tryGit } from "../core/git.js";
 import { readLineage } from "../core/lineage.js";
 import { formatLog, formatNoiseReport, matches, noiseReport, parseLogLine, sinceToIso, type ParsedLog } from "../core/logview.js";
 import { packageRoot, userConfigPath } from "../core/paths.js";
-import { createProjectStore, initRepo, prePushGuardInstalled } from "../core/setup.js";
+import { createProjectStore, initAll, initRepo, prePushGuardInstalled } from "../core/setup.js";
 import { applyChanges, defaultToolDirs, planCursor, planVsCode, USER_RULES, VSCODE_SETTINGS_SNIPPET } from "../core/tools-setup.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { fail, print } from "./shared.js";
@@ -36,21 +36,26 @@ program
 
 program
   .command("init")
-  .description("Register the current source repo with a project's knowledge store (per developer)")
+  .description("Register a source repo with its project's knowledge store (per developer, once per repo; all repos of a project share one store)")
   .requiredOption("--project <name>")
   .requiredOption("--backend <kind>", "git | folder")
   .option("--url <url>", "git backend: store repo URL")
   .option("--path <dir>", "folder backend: shared folder")
-  .option("-C, --repo <dir>", "source repository directory", process.cwd())
-  .action((opts: { project: string; backend: string; url?: string; path?: string; repo: string }) => {
-    const { entry, source, guard } = initRepo({ cwd: opts.repo, project: opts.project, backend: parseBackend(opts.backend), url: opts.url, path: opts.path });
+  .option("--repo-name <name>", "key of this repo in the project, e.g. core, product (default: from the remote)")
+  .option("--all", "register every git repo under -C (a parent folder such as Transfer/), named after its folder unless the store already knows it")
+  .option("-C, --repo <dir>", "source repository directory (or the parent folder with --all)", process.cwd())
+  .action((opts: { project: string; backend: string; url?: string; path?: string; repo: string; repoName?: string; all?: boolean }) => {
+    const base = { project: opts.project, backend: parseBackend(opts.backend), url: opts.url, path: opts.path };
+    if (opts.all && opts.repoName) throw new Error("--repo-name cannot be combined with --all (each repo is named after its folder).");
+    const results = opts.all ? initAll({ ...base, parent: opts.repo }) : [initRepo({ ...base, cwd: opts.repo, repoName: opts.repoName })];
+    const entry = results.at(-1)!.entry;
     const plugin = `${packageRoot().replace(/\\/g, "/")}`;
     print([
-      `Registered ${source.root} -> project "${entry.name}" (${entry.store.backend} store).`,
+      ...results.map(({ repo, source, guard }) =>
+        `Registered ${source.root} as repo "${repo.name}" · push guard: ${guard.installed ? `pre-push hook installed${guard.chained ? " (chaining your hook)" : ""}` : `NOT installed — ${guard.reason}`}`),
+      `Project "${entry.name}" (${entry.store.backend} store) now has ${entry.repos.length} repo${entry.repos.length === 1 ? "" : "s"}: ${entry.repos.map((r) => r.name).join(", ")}.`,
       `User config: ${userConfigPath()}`,
-      guard.installed
-        ? `Push guard: pre-push hook installed (${guard.path})${guard.chained ? ", chaining your existing hook" : ""}. AI agents can commit locally but never push.`
-        : `Push guard: pre-push hook NOT installed — ${guard.reason} The Claude Code PreToolUse guard still applies.`,
+      "AI agents can edit and commit locally but never push. Open the AI tool on one repo or on the parent folder; both work.",
       "",
       "Claude Code (once per machine):",
       `  claude plugin marketplace add "${plugin}"`,
@@ -159,7 +164,12 @@ program
   .description("List registered projects")
   .action(() => {
     const cfg = loadUserConfig();
-    print(cfg.projects.length ? cfg.projects.map((p) => `${p.name}  ${p.store.backend}  ${p.store.url ?? p.store.path ?? "(local)"}  [${p.remotes.join(", ")}]`).join("\n") : "No projects registered.", false);
+    print(cfg.projects.length
+      ? cfg.projects.map((p) => [
+          `${p.name}  ${p.store.backend}  ${p.store.url ?? p.store.path ?? "(local)"}`,
+          ...p.repos.map((r) => `  - ${r.name.padEnd(16)} ${r.remote}${r.localPath ? `  (${r.localPath})` : ""}`),
+        ].join("\n")).join("\n")
+      : "No projects registered.", false);
   });
 
 program
@@ -187,7 +197,7 @@ program
       checks.push(["repo registered", false, `${res.reason}: ${res.detail}`]);
     } else {
       const w = res.workspace;
-      checks.push(["repo registered", true, `project ${w.project.name}`]);
+      checks.push(["repo registered", true, `repo ${w.repo.name} of project ${w.project.name} (${w.project.repos.length} repos registered here)`]);
       try {
         w.store.refresh();
         checks.push(["store reachable", true, `${w.store.kind}`]);

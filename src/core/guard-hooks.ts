@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { checkMcpTool, checkShellCommand, commandTargetDirs, type GuardVerdict } from "./guard.js";
 import { createLogger, withCorrelation } from "./logger.js";
+import { registeredSourcesUnder } from "./parent.js";
 import { findRegisteredSource, resolveWorkspace } from "./workspace.js";
 
 // Push guard for AI agents in registered source repos. Fail closed: once a command
@@ -27,10 +28,15 @@ export function evaluateGuard(input: GuardInput): GuardVerdict & { repo?: string
       const command = input.command ?? "";
       if (!command.trim()) return { blocked: false };
       const dirs = [input.cwd, ...commandTargetDirs(command).map((d) => (isAbsolute(d) ? d : resolve(input.cwd, d)))];
-      const target = dirs.map((d) => safeFind(d)).find((r) => r !== null);
+      let target = dirs.map((d) => safeFind(d)).find((r) => r !== null) ?? null;
+      // Parent folder holding registered repos (Transfer/{Core,Admin,…}): the shell may be inside any
+      // of them, so every push-like command is denied, with the aliases of all of them.
+      const children = target ? [] : safeChildren(input.cwd);
+      if (!target && children.length) target = children[0]!;
       if (!target) return { blocked: false };
       try {
-        const verdict = checkShellCommand(command, { gitAliases: target.source.gitAliases(), readScript: (p) => readScript(input.cwd, p) });
+        const aliases = Object.assign({}, ...[target, ...children].map((t) => t.source.gitAliases()));
+        const verdict = checkShellCommand(command, { gitAliases: aliases, readScript: (p) => readScript(input.cwd, p) });
         if (verdict.blocked) log.warn(["guard", "deny"], "Blocked shell command", { rule: verdict.rule, repo: target.source.root, command });
         return { ...verdict, repo: target.source.root };
       } catch (err) {
@@ -40,11 +46,11 @@ export function evaluateGuard(input: GuardInput): GuardVerdict & { repo?: string
     }
 
     if (input.toolName.startsWith("mcp__")) {
-      const target = safeFind(input.cwd);
+      const target = safeFind(input.cwd) ?? safeChildren(input.cwd)[0] ?? null;
       if (!target) return { blocked: false };
       let allow: string[] = [];
       try {
-        const res = resolveWorkspace(input.cwd, "guard");
+        const res = resolveWorkspace(target.source.root, "guard");
         if (res.ok) allow = res.workspace.config.guard.allowMcpTools;
       } catch {
         // store unreachable: no allow-list, stay strict
@@ -64,6 +70,14 @@ function readScript(cwd: string, path: string): string | null {
     return readFileSync(abs, "utf8");
   } catch {
     return null;
+  }
+}
+
+function safeChildren(dir: string) {
+  try {
+    return registeredSourcesUnder(dir);
+  } catch {
+    return [];
   }
 }
 

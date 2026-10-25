@@ -1,10 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildIndex } from "./codemap.js";
+import { buildIndex, parseRepoRef, readMapsOf } from "./codemap.js";
 import { formatLineageTree } from "./lineage.js";
 import { normalizeBranch } from "./paths.js";
 import { readBranchMaps } from "./report.js";
-import type { Workspace } from "./workspace.js";
+import { openRepo, projectRepos, type Workspace } from "./workspace.js";
 
 // Self-contained static HTML viewer for one branch's map: search, detail pane and
 // a dependency graph. Written to the user cache, never into the source repo.
@@ -14,6 +14,8 @@ export interface ViewData {
   branch: string;
   generatedAt: string;
   coverage: { mapped: number; total: number; percent: number };
+  /** Replaces the coverage line in the header (project view). */
+  scopeLabel?: string;
   lineage: string;
   maps: { path: string; tags: string[]; dependsOn: string[]; body: string; stale: boolean; updatedAt: string; updatedBy: string }[];
 }
@@ -39,11 +41,43 @@ export function collectViewData(ws: Workspace): ViewData {
   };
 }
 
-export function writeView(ws: Workspace): string {
-  const dir = join(ws.cacheDir, normalizeBranch(ws.branch));
+/** Every service of the project in one graph: paths as `repo:path`, cross-service edges included. */
+export function collectProjectViewData(ws: Workspace): ViewData {
+  const maps: ViewData["maps"] = [];
+  const lines: string[] = [];
+  for (const repo of projectRepos(ws)) {
+    const view = repo === ws.repo.name ? { store: ws.store, branch: ws.branch } : openRepo(ws, repo);
+    if (!view) continue;
+    const repoMaps = readMapsOf(view.store, view.branch);
+    lines.push(`${repo}${repo === ws.repo.name ? " (this repo)" : ""}: ${repoMaps.length} maps on ${view.branch}`);
+    for (const m of repoMaps) {
+      maps.push({
+        path: `${repo}:${m.meta.path}`,
+        tags: m.meta.tags,
+        dependsOn: m.meta.dependsOn.map((d) => (parseRepoRef(d) ? d : `${repo}:${d}`)),
+        body: m.body,
+        stale: m.meta.stale,
+        updatedAt: m.meta.updatedAt,
+        updatedBy: m.meta.updatedBy,
+      });
+    }
+  }
+  return {
+    project: ws.project.name,
+    branch: ws.branch,
+    generatedAt: new Date().toISOString(),
+    coverage: { mapped: maps.length, total: 0, percent: 0 },
+    scopeLabel: `all services · ${maps.length} maps · ${lines.length} repos`,
+    lineage: lines.join("\n"),
+    maps: maps.sort((a, b) => a.path.localeCompare(b.path)),
+  };
+}
+
+export function writeView(ws: Workspace, scope: "repo" | "project" = "repo"): string {
+  const dir = scope === "project" ? join(ws.cacheDir, "..") : join(ws.cacheDir, normalizeBranch(ws.branch));
   mkdirSync(dir, { recursive: true });
-  const file = join(dir, "view.html");
-  writeFileSync(file, renderViewHtml(collectViewData(ws)));
+  const file = join(dir, scope === "project" ? `project-${normalizeBranch(ws.branch)}.html` : "view.html");
+  writeFileSync(file, renderViewHtml(scope === "project" ? collectProjectViewData(ws) : collectViewData(ws)));
   return file;
 }
 
@@ -90,7 +124,7 @@ pre.lineage { white-space:pre-wrap; color:var(--muted); font-size:12px; }
 <body>
 <header>
   <h1>codemap · ${escapeHtml(data.project)}</h1>
-  <span class="meta">branch <b>${escapeHtml(data.branch)}</b> · ${data.coverage.mapped}/${data.coverage.total} files mapped (${data.coverage.percent}%) · generated ${escapeHtml(data.generatedAt.slice(0, 16).replace("T", " "))} UTC</span>
+  <span class="meta">branch <b>${escapeHtml(data.branch)}</b> · ${data.scopeLabel ? escapeHtml(data.scopeLabel) : `${data.coverage.mapped}/${data.coverage.total} files mapped (${data.coverage.percent}%)`} · generated ${escapeHtml(data.generatedAt.slice(0, 16).replace("T", " "))} UTC</span>
 </header>
 <main>
   <aside>

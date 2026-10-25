@@ -22,6 +22,15 @@ A kit for AI-assisted source code management. It helps AI tools (Claude Code, Cu
   - the naming and logging conventions
 
   The source repo stays clean. Local tool caches are ignored through `.git/info/exclude`.
+- **Multi-repo projects (microservices).** All repos of a project (e.g. ABC: `core`, `product`, …) share **one** knowledge store, with one set of rules and conventions.
+  - Each repo keeps its own maps and branches in that store (`maps/<repo>/<branch>`).
+  - Agents read other services' maps with `codemap_lookup("core:src/…")` and search every service at once.
+  - Each service has a summary (`service_write`) that appears in every agent's context.
+  - `codemap view --project` draws the whole system.
+- **Parent folder or multi-root workspace.** You can open the AI tool on `Transfer/` (holding `Transactions/`, `Core/`, `Abs/`, `Admin/`) or on a VS Code multi-root workspace of those repos.
+  - Every path is routed to its own repo: `Core/src/x.ts` and `core:src/x.ts` both work.
+  - Session context covers every repo, and the Stop hook lists missing maps per repo.
+  - Every push-like command is denied.
 - **`codemap-mcp`** is the single access point for all three AI tools. All configuration lives at user level.
 - **Claude Code plugin** (`codekit`):
   - `SessionStart` syncs and injects the rules.
@@ -51,8 +60,13 @@ node dist/cli/codekit.js project create shop --backend git --url https://git.int
 #    or folder backend: a shared folder
 node dist/cli/codekit.js project create shop --backend folder --path "\\\\NAS\\codemap\\shop"
 
-# 3. Register your clone of the source repo (once per developer)
-node dist/cli/codekit.js init --project shop --backend git --url https://git.internal/acme/shop-codemap.git -C path/to/shop
+# 3. Register your clone of each source repo (once per developer and repo).
+#    Microservices: every repo of the project uses the SAME --project and store.
+node dist/cli/codekit.js init --project ABC --backend git --url https://git.internal/abc/abc-codemap.git -C path/to/abc-core --repo-name core
+node dist/cli/codekit.js init --project ABC --backend git --url https://git.internal/abc/abc-codemap.git -C path/to/abc-product --repo-name product
+#    (later developers can omit --repo-name: the store remembers each repo's name)
+#    Or register every repo of a parent folder at once (named after their folders):
+node dist/cli/codekit.js init --all --project Transfer --backend git --url https://git.internal/transfer/transfer-codemap.git -C path/to/Transfer
 
 # 4. Claude Code: install the plugin from this repo (local marketplace) + Superpowers
 claude plugin marketplace add path/to/codekit-y
@@ -84,13 +98,14 @@ Optionally run `npm link` to get `codekit`, `codemap` and `codemap-mcp` on your 
 | `codemap sync [--no-github]` | Detect new branches, syncs and merges (squash PRs via the GitHub API, GET only), and update maps |
 | `codemap merge <from> --into <to> [--pr N]` | Manual map merge, for squash merges |
 | `codemap lineage [branch]` / `lineage set-parent <b> <p>` | Branch history |
-| `codemap search <query>` | Search maps |
+| `codemap search <query> [--project]` | Search maps (of this repo, or of every repo in the project) |
 | `codemap report [-b branch...] [--format md\|json] [--out f]` | Coverage, missing and stale maps per branch, from committed source |
-| `codemap view [--open]` | Static HTML viewer (search, detail, dependency graph) in `~/.codekit/cache` |
+| `codemap view [--open] [--project]` | Static HTML viewer (search, detail, dependency graph) for this repo or the whole project |
 | `codemap hook <event>` | Claude Code hook entry point |
 
 ## MCP tools
-- **Map:** `codemap_context`, `codemap_lookup`, `codemap_write`, `codemap_search`
+- **Map:** `codemap_context`, `codemap_lookup` (also `<repo>:<path>`), `codemap_write`, `codemap_search` (`scope: project`)
+- **Services:** `service_write`, `service_list`
 - **Plans:** `plan_save`, `plan_list`
 - **Naming convention:** `naming_list`, `naming_add_rule`, `naming_edit_rule`
 - **Logging convention:** `logging_convention`, `logging_add_tag`, `logging_detect`, `logging_sample` (with an adoption guide for an existing library or in-house logger), `logging_set_project`

@@ -165,23 +165,23 @@ for (const backend of ["git", "folder"] as const) {
       expect(start.hookSpecificOutput.additionalContext).toContain('project "shop"');
       expect(start.hookSpecificOutput.additionalContext).toContain("Naming convention");
 
-      handlePostToolUse({ ...session, tool_name: "Read", tool_input: { file_path: `${fx.source}/src/auth/login.ts` } });
-      handlePostToolUse({ ...session, tool_name: "Read", tool_input: { file_path: `${fx.source}/package-lock.json` } }); // excluded
-      const blocked = handleStop(session) as { decision: string; reason: string };
+      await handlePostToolUse({ ...session, tool_name: "Read", tool_input: { file_path: `${fx.source}/src/auth/login.ts` } });
+      await handlePostToolUse({ ...session, tool_name: "Read", tool_input: { file_path: `${fx.source}/package-lock.json` } }); // excluded
+      const blocked = (await handleStop(session)) as { decision: string; reason: string };
       expect(blocked.decision).toBe("block");
       expect(blocked.reason).toContain("src/auth/login.ts (missing)");
       expect(blocked.reason).not.toContain("package-lock.json");
-      expect(handleStop({ ...session, stop_hook_active: true })).toBeNull();
+      expect(await handleStop({ ...session, stop_hook_active: true })).toBeNull();
 
       writeMap(fx.ws(), { path: "src/auth/login.ts", body: MAP_BODY });
-      expect(handleStop(session)).toBeNull();
+      expect(await handleStop(session)).toBeNull();
     });
 
     it("hooks are no-ops for unregistered repos", async () => {
       fx = createFixture(backend);
       sh(fx.source, "remote", "set-url", "origin", "https://github.com/someone/else.git");
       expect(await handleSessionStart({ session_id: "x", cwd: fx.source })).toBeNull();
-      expect(handleStop({ session_id: "x", cwd: fx.source })).toBeNull();
+      expect(await handleStop({ session_id: "x", cwd: fx.source })).toBeNull();
     });
 
     it("context text summarizes coverage and rules", () => {

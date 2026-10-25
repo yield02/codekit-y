@@ -19,15 +19,15 @@ const backends: Record<string, (root: string) => Env> = {
   git: (root) => {
     const remote = join(root, "store.git");
     execFileSync("git", ["init", "-q", "--bare", remote]);
-    const store = new GitStorage(join(root, "dev-a"), remote);
+    const store = new GitStorage(join(root, "dev-a"), remote, "core");
     store.initConfig(new Map([["codekit.yaml", "project: shop\n"]]));
-    return { store, other: () => new GitStorage(join(root, "dev-b"), remote) };
+    return { store, other: () => new GitStorage(join(root, "dev-b"), remote, "core") };
   },
   folder: (root) => {
     const path = join(root, "nas");
-    const store = new FolderStorage(path, "dev-a");
+    const store = new FolderStorage(path, "dev-a", "core");
     store.writeConfig("codekit.yaml", "project: shop\n", "init");
-    return { store, other: () => new FolderStorage(path, "dev-b") };
+    return { store, other: () => new FolderStorage(path, "dev-b", "core") };
   },
 };
 
