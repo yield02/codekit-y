@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  prod profile : one JSON object per line (LogstashEncoder) on stdout.
+  other        : PrettyLogLayout single line, e.g. 09:12:03.120 INFO  [cid=7f3a91c2] [auth,login] Login success userId=42 (12ms)
+-->
+<configuration>
+    <springProperty scope="local" name="SERVICE" source="spring.application.name" defaultValue="unknown-service"/>
+
+    <springProfile name="prod">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <!-- ISO-8601 UTC, e.g. 2026-10-25T09:12:03.120Z -->
+                <timestampPattern>[ISO_INSTANT]</timestampPattern>
+                <timeZone>UTC</timeZone>
+                <fieldNames>
+                    <timestamp>timestamp</timestamp>
+                    <message>message</message>
+                    <level>level</level>
+                    <logger>logger</logger>
+                    <thread>thread</thread>
+                    <version>[ignore]</version>
+                    <levelValue>[ignore]</levelValue>
+                    <!-- replaced by ErrorJsonProvider: "error": {type, message, stack} -->
+                    <stackTrace>[ignore]</stackTrace>
+                </fieldNames>
+                <customFields>{"service":"${SERVICE}"}</customFields>
+                <!-- MDC correlationId is written as "correlationId". MDC "tags" is excluded because TaggedLogger
+                     already writes "tags" as a real JSON array (structured argument). -->
+                <excludeMdcKeyName>tags</excludeMdcKeyName>
+                <provider class="com.example.logging.ErrorJsonProvider"/>
+            </encoder>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="!prod">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+                <layout class="com.example.logging.PrettyLogLayout"/>
+            </encoder>
+        </appender>
+        <logger name="com.example" level="DEBUG"/>
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+</configuration>

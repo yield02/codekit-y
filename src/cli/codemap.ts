@@ -1,10 +1,16 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { Command } from "commander";
 import { buildIndex, lookup, search } from "../core/codemap.js";
+import { handleCursorMcp, handleCursorShell, handlePreToolUse } from "../core/guard-hooks.js";
 import { handlePostToolUse, handleSessionStart, handleStop, handleUserPromptSubmit, type HookPayload } from "../core/hooks.js";
+import { detectPrMerges } from "../core/github.js";
 import { formatLineageTree } from "../core/lineage.js";
 import { withCorrelation } from "../core/logger.js";
+import { formatReportMarkdown, projectReport } from "../core/report.js";
 import { manualMerge, setParent, sync } from "../core/sync.js";
+import { writeView } from "../core/view.js";
 import { fail, print, readStdinJson, requireWorkspace } from "./shared.js";
 
 const program = new Command("codemap")
@@ -53,9 +59,17 @@ program
 
 program
   .command("sync")
-  .description("Detect new branches, syncs and merges, and update maps accordingly")
-  .action(() => {
-    const report = withCorrelation(undefined, () => sync(ws()));
+  .description("Detect new branches, syncs and merges (incl. squash PR merges on GitHub), and update maps")
+  .option("--no-github", "skip the GitHub PR check")
+  .action(async (opts: { github: boolean }) => {
+    const w = ws();
+    const report = withCorrelation(undefined, () => sync(w));
+    if (opts.github) {
+      const prs = await detectPrMerges(w, { force: true });
+      for (const m of prs.merged) report.merged.push({ branch: m.branch, into: m.into, commit: `PR #${m.pr}`, result: m.result });
+      if (prs.skipped && !json()) process.stderr.write(`github: ${prs.skipped}
+`);
+    }
     if (json()) return print(report, true);
     const lines = [`branch ${report.branch}`];
     if (report.created) lines.push(`created map from ${report.created.parent ?? "(root)"}`);
@@ -94,6 +108,32 @@ program
     print(json() ? res : `merged ${from} into ${opts.into}: ${res.changed} files, ${res.resolvedConflicts.length} conflicts resolved, ${res.markedStale.length} stale`, json());
   });
 
+program
+  .command("report")
+  .description("Coverage, missing and stale maps per branch, from committed source (for teams and CI)")
+  .option("-b, --branch <name...>", "branches to report (default: all active map branches)")
+  .option("--format <fmt>", "md | json", "md")
+  .option("--out <file>", "write to a file instead of stdout")
+  .action((opts: { branch?: string[]; format: string; out?: string }) => {
+    const report = projectReport(ws(), opts.branch);
+    const text = opts.format === "json" || json() ? JSON.stringify(report, null, 2) + "\n" : formatReportMarkdown(report);
+    if (opts.out) writeFileSync(opts.out, text);
+    else process.stdout.write(text);
+  });
+
+program
+  .command("view")
+  .description("Generate a static HTML viewer for the current branch's map (in ~/.codekit/cache)")
+  .option("--open", "open it in the default browser", false)
+  .action((opts: { open: boolean }) => {
+    const file = writeView(ws());
+    print(file, false);
+    if (opts.open) {
+      const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", file]] : process.platform === "darwin" ? ["open", [file]] : ["xdg-open", [file]];
+      spawn(cmd as string, args as string[], { detached: true, stdio: "ignore" }).unref();
+    }
+  });
+
 const lineage = program.command("lineage").description("Branch history: checkout origin, syncs, merges");
 lineage
   .command("show", { isDefault: true })
@@ -114,18 +154,22 @@ lineage
 program
   .command("hook")
   .description("Claude Code hook entry point (reads the hook payload from stdin)")
-  .argument("<event>", "session-start | prompt | track | stop")
-  .action((event: string) => {
+  .argument("<event>", "session-start | prompt | pre-tool-use | track | stop | cursor-shell | cursor-mcp")
+  .action(async (event: string) => {
     const payload = readStdinJson() as HookPayload;
-    const handlers: Record<string, (p: HookPayload) => Record<string, unknown> | null> = {
+    type Out = Record<string, unknown> | null;
+    const handlers: Record<string, (p: HookPayload) => Out | Promise<Out>> = {
       "session-start": handleSessionStart,
       prompt: handleUserPromptSubmit,
+      "pre-tool-use": handlePreToolUse,
       track: handlePostToolUse,
       stop: handleStop,
+      "cursor-shell": handleCursorShell,
+      "cursor-mcp": handleCursorMcp,
     };
     const handler = handlers[event];
     if (!handler) return; // unknown events are ignored so a newer plugin never breaks an older CLI
-    const out = handler(payload);
+    const out = await handler(payload);
     if (out) process.stdout.write(JSON.stringify(out));
   });
 

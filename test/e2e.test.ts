@@ -158,10 +158,10 @@ for (const backend of ["git", "folder"] as const) {
       expect(readLineage(m.store, "feature/squash", "main")!.events.at(-1)!.pr).toBe(42);
     });
 
-    it("hooks: session start injects context, stop blocks until maps are written", () => {
+    it("hooks: session start injects context, stop blocks until maps are written", async () => {
       fx = createFixture(backend);
       const session = { session_id: "s-1", cwd: fx.source };
-      const start = handleSessionStart(session) as { hookSpecificOutput: { additionalContext: string } };
+      const start = (await handleSessionStart(session)) as { hookSpecificOutput: { additionalContext: string } };
       expect(start.hookSpecificOutput.additionalContext).toContain('project "shop"');
       expect(start.hookSpecificOutput.additionalContext).toContain("Naming convention");
 
@@ -177,10 +177,10 @@ for (const backend of ["git", "folder"] as const) {
       expect(handleStop(session)).toBeNull();
     });
 
-    it("hooks are no-ops for unregistered repos", () => {
+    it("hooks are no-ops for unregistered repos", async () => {
       fx = createFixture(backend);
       sh(fx.source, "remote", "set-url", "origin", "https://github.com/someone/else.git");
-      expect(handleSessionStart({ session_id: "x", cwd: fx.source })).toBeNull();
+      expect(await handleSessionStart({ session_id: "x", cwd: fx.source })).toBeNull();
       expect(handleStop({ session_id: "x", cwd: fx.source })).toBeNull();
     });
 

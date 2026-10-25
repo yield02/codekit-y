@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -6,6 +8,8 @@ import { listPlans, lookup, readPlan, savePlan, search, writeMap } from "../core
 import { MCP_INSTRUCTIONS, buildContextText } from "../core/context.js";
 import { addLogTag, addNamingRule, editNamingRule, parseLogTags, parseNamingRules } from "../core/conventions.js";
 import { createLogger, withCorrelation } from "../core/logger.js";
+import { detectPrMerges } from "../core/github.js";
+import { packageRoot } from "../core/paths.js";
 import { ensureBranch, sync } from "../core/sync.js";
 import { resolveWorkspace, type Workspace } from "../core/workspace.js";
 
@@ -45,6 +49,7 @@ export function createServer(): McpServer {
     if (!synced.has(key)) {
       sync(ws);
       synced.add(key);
+      await detectPrMerges(ws).catch((err) => log.warn(["mcp", "github"], "PR merge detection failed", { error: String(err) }));
     } else {
       ensureBranch(ws);
     }
@@ -161,6 +166,13 @@ export function createServer(): McpServer {
   tool("logging_convention", "The project's logging standard (required fields, correlationId rules, tag registry).", {}, (_args, ws) =>
     ws.store.readConfig("conventions/logging.md") ?? "No logging convention defined.");
 
+  tool(
+    "logging_sample",
+    "Reference implementation of the logging convention for a stack (logger wrapper, correlationId middleware, propagation, lint config). Adapt names to the project's naming convention when copying.",
+    { stack: z.enum(["node", "java", "dotnet", "python"]) },
+    (args) => readSample(args.stack),
+  );
+
   tool("logging_add_tag", "Register a new log tag (kebab-case) in the tag registry.", { tag: z.string(), description: z.string().min(1) }, (args, ws) => {
     const md = ws.store.readConfig("conventions/logging.md") ?? "# Logging convention\n";
     ws.store.writeConfig("conventions/logging.md", addLogTag(md, args.tag, args.description), `logging: add tag ${args.tag}`);
@@ -168,6 +180,24 @@ export function createServer(): McpServer {
   });
 
   return server;
+}
+
+/** All text files of `logging/<stack>/`, concatenated with path headers. */
+export function readSample(stack: string): string {
+  const root = join(packageRoot(), "logging", stack);
+  if (!existsSync(root)) return `No sample for ${stack} in this kit build.`;
+  const files: string[] = [];
+  const walk = (rel: string) => {
+    for (const e of readdirSync(join(root, rel), { withFileTypes: true })) {
+      const child = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { if (!["node_modules", "__pycache__", "bin", "obj", "target"].includes(e.name)) walk(child); }
+      else files.push(child);
+    }
+  };
+  walk("");
+  return files.sort((a, b) => (a === "README.md" ? -1 : b === "README.md" ? 1 : a.localeCompare(b)))
+    .map((f) => `=== logging/${stack}/${f}\n${readFileSync(join(root, f), "utf8")}`)
+    .join("\n\n");
 }
 
 function formatMeta(meta: { sourceHash: string; updatedAt: string; updatedBy: string; dependsOn: string[]; tags: string[] }): string {

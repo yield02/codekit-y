@@ -137,11 +137,11 @@ export function sync(ws: Workspace): SyncReport {
 }
 
 /** Manual merge (squash merges, cross-branch merges the lazy detection cannot see). */
-export function manualMerge(ws: Workspace, from: string, into: string, pr?: number): MergeSummary {
+export function manualMerge(ws: Workspace, from: string, into: string, pr?: number, mergedCommit?: string): MergeSummary {
   if (!ws.store.hasBranch(from)) throw new Error(`No map for branch ${from}`);
   if (!ws.store.hasBranch(into)) throw new Error(`No map for branch ${into}`);
   const lineage = readLineage(ws.store, from);
-  const tip = ws.source.resolveBranch(from) ?? undefined;
+  const tip = mergedCommit ?? ws.source.resolveBranch(from) ?? undefined;
   if (lineage) {
     writeLineage(ws.store, {
       ...lineage,

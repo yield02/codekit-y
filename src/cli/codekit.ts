@@ -7,7 +7,8 @@ import { loadUserConfig } from "../core/config.js";
 import { tryGit } from "../core/git.js";
 import { readLineage } from "../core/lineage.js";
 import { packageRoot, userConfigPath } from "../core/paths.js";
-import { createProjectStore, initRepo } from "../core/setup.js";
+import { createProjectStore, initRepo, prePushGuardInstalled } from "../core/setup.js";
+import { applyChanges, defaultToolDirs, planCursor, planVsCode, USER_RULES, VSCODE_SETTINGS_SNIPPET } from "../core/tools-setup.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { fail, print } from "./shared.js";
 
@@ -40,18 +41,21 @@ program
   .option("--path <dir>", "folder backend: shared folder")
   .option("-C, --repo <dir>", "source repository directory", process.cwd())
   .action((opts: { project: string; backend: string; url?: string; path?: string; repo: string }) => {
-    const { entry, source } = initRepo({ cwd: opts.repo, project: opts.project, backend: parseBackend(opts.backend), url: opts.url, path: opts.path });
+    const { entry, source, guard } = initRepo({ cwd: opts.repo, project: opts.project, backend: parseBackend(opts.backend), url: opts.url, path: opts.path });
     const plugin = `${packageRoot().replace(/\\/g, "/")}`;
     print([
       `Registered ${source.root} -> project "${entry.name}" (${entry.store.backend} store).`,
       `User config: ${userConfigPath()}`,
+      guard.installed
+        ? `Push guard: pre-push hook installed (${guard.path})${guard.chained ? ", chaining your existing hook" : ""}. AI agents can commit locally but never push.`
+        : `Push guard: pre-push hook NOT installed — ${guard.reason} The Claude Code PreToolUse guard still applies.`,
       "",
       "Claude Code (once per machine):",
       `  claude plugin marketplace add "${plugin}"`,
       "  claude plugin install codekit@codekit-y",
       "  claude plugin marketplace add obra/superpowers-marketplace && claude plugin install superpowers@superpowers-marketplace",
       "",
-      "Cursor / Copilot: run `codekit mcp-config` and paste the snippet into your *user-level* MCP settings.",
+      "Cursor / Copilot (user-level MCP, push-guard hooks, instructions): codekit setup-tools",
       "Then verify with: codekit doctor",
     ].join("\n"), false);
   });
@@ -69,6 +73,32 @@ program
       JSON.stringify({ servers: { codemap: { type: "stdio", ...server } } }, null, 2),
       "",
       "Serena (structural layer) — add alongside, per the Serena docs (requires uv).",
+    ].join("\n"), false);
+  });
+
+program
+  .command("setup-tools")
+  .description("Write user-level config for Cursor and VS Code/Copilot: MCP server, push-guard hooks, instructions")
+  .option("--cursor", "configure Cursor (~/.cursor)")
+  .option("--vscode", "configure VS Code / Copilot (user data dir)")
+  .option("--dry-run", "show what would change without writing", false)
+  .action((opts: { cursor?: boolean; vscode?: boolean; dryRun: boolean }) => {
+    const both = !opts.cursor && !opts.vscode;
+    const dirs = defaultToolDirs();
+    const changes = [...(both || opts.cursor ? planCursor(dirs) : []), ...(both || opts.vscode ? planVsCode(dirs) : [])];
+    const lines = changes.map((c) => `${c.action.padEnd(9)} ${c.file}\n          ${c.detail}`);
+    if (!opts.dryRun) applyChanges(changes);
+    const skipped = changes.filter((c) => c.action === "skipped" && c.content);
+    print([
+      opts.dryRun ? "Dry run — nothing written:" : "User-level tool config:",
+      ...lines,
+      ...skipped.flatMap((c) => ["", `Merge manually into ${c.file}:`, c.content!]),
+      "",
+      "Cursor: also paste these lines into Settings → Rules → User Rules:",
+      USER_RULES.split("\n").slice(0, 5).join("\n"),
+      "",
+      "VS Code: add to your user settings.json so agent pushes always need your approval:",
+      JSON.stringify(VSCODE_SETTINGS_SNIPPET, null, 2),
     ].join("\n"), false);
   });
 
@@ -113,6 +143,8 @@ program
         const mapExists = w.store.hasBranch(w.branch);
         const lineage = mapExists ? readLineage(w.store, w.branch) : null;
         checks.push(["branch map", true, mapExists ? `${w.branch} (from ${lineage?.parent ?? "root"})` : `${w.branch} — will be created on first use`]);
+        const guarded = prePushGuardInstalled(w.source);
+        checks.push(["push guard (pre-push)", guarded, guarded ? "installed" : w.source.hooksPath() ? "core.hooksPath set; relying on PreToolUse/Cursor guards" : "missing — run `codekit init` again"]);
       } catch (err) {
         checks.push(["store reachable", false, err instanceof Error ? err.message : String(err)]);
       }

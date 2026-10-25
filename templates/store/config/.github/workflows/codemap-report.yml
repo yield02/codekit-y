@@ -1,0 +1,52 @@
+# Periodic codemap coverage report for project "{{project}}" (git backend).
+# Runs in the knowledge store repo. It reads the source repo with a READ-ONLY token
+# and never pushes anywhere. The store repo's default branch must be `_config`.
+#
+# Setup (store repo -> Settings):
+#   Variables: SOURCE_REPOSITORY = owner/repo of the source, CODEKIT_REPO_URL = clone URL of codekit-y
+#   Secrets:   SOURCE_READ_TOKEN = fine-grained token with "Contents: read" on the source repo only
+name: codemap report
+
+on:
+  schedule:
+    - cron: "0 1 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the source repo (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPOSITORY }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          fetch-depth: 0
+          path: source
+          persist-credentials: false
+
+      - name: Fetch all source branches
+        env:
+          TOKEN: ${{ secrets.SOURCE_READ_TOKEN }}
+        run: git -C source fetch --quiet --no-tags "https://x-access-token:${TOKEN}@github.com/${{ vars.SOURCE_REPOSITORY }}.git" '+refs/heads/*:refs/remotes/origin/*'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build codekit
+        run: |
+          git clone --quiet --depth 1 "${{ vars.CODEKIT_REPO_URL }}" codekit
+          cd codekit && npm ci --no-audit --no-fund && npm run build
+
+      - name: Report
+        env:
+          CODEKIT_HOME: ${{ runner.temp }}/codekit-home
+          STORE_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+        run: |
+          node codekit/dist/cli/codekit.js init --project "{{project}}" --backend git --url "$STORE_URL" -C source
+          node codekit/dist/cli/codemap.js -C source report --out report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"

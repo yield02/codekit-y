@@ -36,6 +36,10 @@ export interface StoreConfig {
   /** Also require maps for files the AI only read (not just edited). */
   trackReads: boolean;
   mapMaxLines: number;
+  /** GitHub API (read-only GET) to detect squash/rebase PR merges the git history cannot show. */
+  github: { enabled: boolean; apiUrl?: string; checkIntervalMinutes: number };
+  /** Push guard. It cannot be disabled; only individual MCP tools can be allow-listed. */
+  guard: { allowMcpTools: string[] };
 }
 
 export const DEFAULT_STORE_CONFIG: Omit<StoreConfig, "project"> = {
@@ -64,6 +68,8 @@ export const DEFAULT_STORE_CONFIG: Omit<StoreConfig, "project"> = {
   enforce: "fail",
   trackReads: true,
   mapMaxLines: 60,
+  github: { enabled: true, checkIntervalMinutes: 10 },
+  guard: { allowMcpTools: [] },
 };
 
 export function loadUserConfig(): UserConfig {
@@ -94,6 +100,8 @@ export function parseStoreConfig(content: string | null, project: string): Store
   return {
     ...DEFAULT_STORE_CONFIG,
     ...(raw ?? {}),
+    github: { ...DEFAULT_STORE_CONFIG.github, ...(raw?.github ?? {}) },
+    guard: { allowMcpTools: Array.isArray(raw?.guard?.allowMcpTools) ? raw!.guard!.allowMcpTools : [] },
     project: raw?.project ?? project,
   };
 }

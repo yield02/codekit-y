@@ -8,6 +8,7 @@ const MAX_DOC_CHARS = 12_000;
 /** Short instructions returned by the MCP server on initialize (all clients). */
 export const MCP_INSTRUCTIONS = `codekit keeps a shared, per-branch codebase map OUTSIDE the source repo.
 For any repo registered with codekit:
+0. NEVER push the source repo or write to its remote (no git push, PR create/merge, API writes). Editing and local commits are fine; the developer pushes.
 1. Call codemap_context first: it returns the project rules, naming and logging conventions, and map coverage.
 2. Before reading source files, call codemap_lookup for them; read source only when the map is missing or stale.
 3. After reading a file in depth or editing it, if its map was missing or stale, call codemap_write with sections:
@@ -47,7 +48,8 @@ export function buildContextText(ws: Workspace, report?: SyncReport): string {
 export function workflowReminder(ws: Workspace): string {
   return `[codekit] Project "${ws.project.name}" on branch "${ws.branch}": check the map (codemap_lookup) before reading source; ` +
     `plan with Superpowers (brainstorming -> writing-plans, save via plan_save) before non-trivial changes; ` +
-    `write maps for files you read deeply or edit; follow the naming and logging conventions.`;
+    `write maps for files you read deeply or edit; follow the naming and logging conventions; ` +
+    `you may commit locally but NEVER push or write to the remote — the developer pushes.`;
 }
 
 function truncate(text: string): string {

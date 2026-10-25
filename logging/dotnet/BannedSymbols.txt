@@ -1,0 +1,58 @@
+M:System.Console.WriteLine;Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Boolean);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Char);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Char[]);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Char[],System.Int32,System.Int32);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Decimal);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Double);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Int32);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.UInt32);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Int64);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.UInt64);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Object);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.Single);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.String);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.String,System.Object);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.String,System.Object,System.Object);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.String,System.Object,System.Object,System.Object);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:System.Console.WriteLine(System.String,System.Object[]);Use TaggedLogger (log.Info/Debug/Warn/Error with tags) instead of Console output
+M:Serilog.Log.Debug(System.String);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Debug``1(System.String,``0);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Debug``2(System.String,``0,``1);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Debug``3(System.String,``0,``1,``2);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Debug(System.String,System.Object[]);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Debug(System.Exception,System.String);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Debug``1(System.Exception,System.String,``0);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Debug``2(System.Exception,System.String,``0,``1);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Debug``3(System.Exception,System.String,``0,``1,``2);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Debug(System.Exception,System.String,System.Object[]);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information(System.String);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information``1(System.String,``0);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information``2(System.String,``0,``1);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information``3(System.String,``0,``1,``2);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information(System.String,System.Object[]);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information(System.Exception,System.String);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information``1(System.Exception,System.String,``0);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information``2(System.Exception,System.String,``0,``1);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information``3(System.Exception,System.String,``0,``1,``2);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Information(System.Exception,System.String,System.Object[]);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning(System.String);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning``1(System.String,``0);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning``2(System.String,``0,``1);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning``3(System.String,``0,``1,``2);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning(System.String,System.Object[]);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning(System.Exception,System.String);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning``1(System.Exception,System.String,``0);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning``2(System.Exception,System.String,``0,``1);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning``3(System.Exception,System.String,``0,``1,``2);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Warning(System.Exception,System.String,System.Object[]);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error(System.String);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error``1(System.String,``0);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error``2(System.String,``0,``1);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error``3(System.String,``0,``1,``2);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error(System.String,System.Object[]);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error(System.Exception,System.String);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error``1(System.Exception,System.String,``0);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error``2(System.Exception,System.String,``0,``1);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error``3(System.Exception,System.String,``0,``1,``2);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API
+M:Serilog.Log.Error(System.Exception,System.String,System.Object[]);Use TaggedLogger (mandatory tags) instead of the static Serilog.Log API

@@ -1,0 +1,41 @@
+<!--
+  Add inside <dependencies> of a Spring Boot 3.x project (spring-boot-starter-parent or its BOM is assumed;
+  spring-boot-starter-web / spring-boot-starter-test are assumed to be present already).
+-->
+<dependencies>
+
+    <!-- JSON log output for the prod profile.
+         8.1 needs Logback 1.5 + Jackson 2.17 (Spring Boot 3.3+). For Spring Boot 3.0-3.2 (Logback 1.4) use 7.4.
+         Do NOT use 9.x with Spring Boot 3: it moved to Jackson 3 (Spring Boot 4). -->
+    <dependency>
+        <groupId>net.logstash.logback</groupId>
+        <artifactId>logstash-logback-encoder</artifactId>
+        <version>8.1</version>
+    </dependency>
+
+    <!-- Compile-time only: CorrelationId uses the trace id when an OpenTelemetry span is active.
+         Version is managed by Spring Boot's dependency management (OpenTelemetry BOM).
+         At runtime the class is optional; without it a UUIDv7 is generated. -->
+    <dependency>
+        <groupId>io.opentelemetry</groupId>
+        <artifactId>opentelemetry-api</artifactId>
+        <optional>true</optional>
+    </dependency>
+
+    <!-- Only needed for CorrelationPropagation.webClientFilter(); otherwise delete that method instead. -->
+    <!--
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-webflux</artifactId>
+    </dependency>
+    -->
+
+    <!-- Bans System.out/err and direct LoggerFactory usage (LoggingArchitectureTest). -->
+    <dependency>
+        <groupId>com.tngtech.archunit</groupId>
+        <artifactId>archunit-junit5</artifactId>
+        <version>1.4.1</version>
+        <scope>test</scope>
+    </dependency>
+
+</dependencies>
