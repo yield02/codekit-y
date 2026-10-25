@@ -1,0 +1,38 @@
+# Knowledge store settings for project "{{project}}".
+# Shared by every member; edit and commit (git backend) or save (folder backend).
+project: {{project}}
+defaultBranch: {{defaultBranch}}
+
+# Source files that need a map. Empty include = everything not excluded.
+include: []
+exclude:
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/target/**"
+  - "**/bin/**"
+  - "**/obj/**"
+  - "**/.venv/**"
+  - "**/__pycache__/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
+  - "**/test/**"
+  - "**/tests/**"
+  - "*.lock"
+  - "package-lock.json"
+  - "*.min.js"
+  - "*.map"
+  - "*.png"
+  - "*.jpg"
+  - "*.svg"
+  - "*.ico"
+  - "*.md"
+  - ".serena/**"
+  - ".ua/**"
+
+# warn: report missing/stale maps | fail: Claude Code's Stop hook asks the AI to write them first
+enforce: fail
+# true: files the AI only read also need a map; false: only edited files
+trackReads: true
+# Soft limit for a map body
+mapMaxLines: 60

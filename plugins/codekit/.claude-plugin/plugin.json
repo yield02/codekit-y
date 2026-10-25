@@ -1,0 +1,6 @@
+{
+  "name": "codekit",
+  "version": "0.1.0",
+  "description": "Lazy, shared, per-branch codebase map kept outside the source repo; Superpowers planning workflow; naming and logging conventions.",
+  "author": { "name": "codekit-y" }
+}
