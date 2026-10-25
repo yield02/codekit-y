@@ -98,4 +98,10 @@ export function createFixture(backend: BackendKind): Fixture {
   };
 }
 
+/**
+ * Yield to the event loop. Fixtures run hundreds of synchronous git commands; on slow CI
+ * runners a long blocking stretch makes vitest's worker RPC time out (60 s).
+ */
+export const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
 export const MAP_BODY = "## Purpose\nLogin.\n## Public API\n- login()\n## Main flow\n1. check\n## Caveats\nnone";

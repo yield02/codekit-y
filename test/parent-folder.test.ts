@@ -10,12 +10,12 @@ import { resolveRoots, workspaceForPath } from "../src/core/parent.js";
 import { createProjectStore, initAll } from "../src/core/setup.js";
 import { createServer } from "../src/mcp/server.js";
 import { requireWorkspaces } from "../src/cli/shared.js";
-import { IDENTITY, MAP_BODY, sh, tempDir, writeSource } from "./helpers.js";
+import { IDENTITY, MAP_BODY, sh, tempDir, tick, writeSource } from "./helpers.js";
 
 const SERVICES = ["Transactions", "Core", "Abs", "Admin"];
 
 /** Transfer/{Transactions,Core,Abs,Admin}: a parent folder (not a repo) holding 4 registered repos. */
-function createTransfer() {
+async function createTransfer() {
   const root = tempDir("codekit-transfer-");
   process.env.CODEKIT_HOME = join(root, "home");
   Object.assign(process.env, IDENTITY);
@@ -24,6 +24,7 @@ function createTransfer() {
   const parent = join(root, "Transfer");
   mkdirSync(join(parent, "docs"), { recursive: true }); // a plain folder next to the repos
   for (const name of SERVICES) {
+    await tick();
     const remote = join(root, "github", `transfer-${name.toLowerCase()}.git`);
     execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
     const dir = join(parent, name);
@@ -35,7 +36,9 @@ function createTransfer() {
     sh(dir, "commit", "-qm", "init");
     sh(dir, "push", "-q", "-u", "origin", "main");
   }
+  await tick();
   const results = initAll({ parent, project: "Transfer", backend: "folder", path: store });
+  await tick();
   return { root, parent, store, results };
 }
 
@@ -53,8 +56,8 @@ async function mcpClient(rootDir: string) {
 }
 
 describe("parent folder Transfer/{Transactions,Core,Abs,Admin}", () => {
-  let fx: ReturnType<typeof createTransfer>;
-  beforeEach(() => { fx = createTransfer(); });
+  let fx: Awaited<ReturnType<typeof createTransfer>>;
+  beforeEach(async () => { fx = await createTransfer(); });
   afterEach(() => { delete process.env.CODEKIT_REPO; });
 
   it("init --all registers every sub-repo, named after its folder", () => {
