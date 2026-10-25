@@ -110,6 +110,30 @@ stale: false
 Body: `## Purpose` · `## Public API` · `## Main flow` · `## Caveats` (limit ~60 lines).
 `index.json` (entry list + `dependsOn` graph + coverage) is **not stored in the knowledge store**; it is generated in `~/.codekit/cache/` (reads frontmatter only, < 1s).
 
+### 3.4 Multi-repo projects (microservices)
+A project such as **ABC** with many repos (`core`, `product`, …) has **one** knowledge store:
+
+| | Shared by all repos | Per repo |
+|---|---|---|
+| Git backend | branch `_config` (codekit.yaml, rules, conventions, report workflow) | branches `maps/<repo>/<branch>` (worktrees `wt/<repo>/<branch>`) |
+| Folder backend | `config/` | `repos/<repo>/branches/<branch>/` |
+| Content | rules, naming and logging conventions, tag registry, per-repo overrides (`repos:` in codekit.yaml) | maps (`modules/`), lineage, plans, `service.md` |
+
+- **Repo names are decided by the store.** The first `codekit init --project ABC --repo-name core` records `core → remote` in codekit.yaml. Later developers get the same name automatically, and a conflicting name is rejected. This keeps everyone's maps in the same place.
+- **Branches are per repo.** `feature/x` in `product` does not touch `core`. A repo's first map branch is rooted at its default branch.
+- **Cross-service lookups:** `codemap_lookup("core:src/api/user.ts")` reads core's map. It uses the branch with the same name if there is one, otherwise core's default branch. When core is cloned on this machine (its `localPath` is known), freshness is checked against that clone; otherwise the status is `remote`.
+- `dependsOn` may reference other services as `<repo>:<path>`. `codemap_search` with `scope: project` and `codemap view --project` cover every repo, cross-service edges included.
+- **Service summaries:** each repo has a `service.md` (Purpose, Exposes, Consumes, Data owned, Notes), written with `service_write`. Every repo's session context includes the summaries of all services, so an agent working on `product` knows what `core` offers.
+- **Reports:** the store's report workflow runs a matrix over `SOURCE_REPOSITORIES`.
+- The push guard applies per repo, unchanged. Each repo is edited and committed locally, and the developer pushes.
+
+**Parent folder / multi-root workspace.** Developers often open the whole system, for example `Transfer/` holding the `Transactions`, `Core`, `Abs` and `Admin` repos, or a VS Code multi-root workspace of those repos. codekit resolves such a folder to all the registered repos inside it. It uses the clone paths recorded by `codekit init` and only falls back to a shallow scan for older configs, so hooks stay fast in large unrelated folders.
+- **SessionStart:** one context listing every repo (folder → repo, branch, coverage), then each project's services, rules and conventions, once per project.
+- **PostToolUse / Stop:** a touched file is tracked under the repo that owns it, found from the file's own folder. Stop lists the pending maps as `<repo>:<path>`.
+- **MCP:** paths may be relative to the parent (`Core/src/x.ts`), absolute, or `<repo>:<path>`. Tools without a path (`plan_save`, `service_write`, `logging_detect`) require `repo` when more than one repo is present. Search defaults to project scope. Multi-root clients are supported through MCP roots.
+- **Push guard:** from a parent folder every push-like command is denied, using the git aliases of all the repos inside, because the shell could be in any of them.
+- **CLI:** `codekit init --all -C Transfer --project Transfer` registers every sub-repo, named after its folder unless the store already knows the repo. `codemap status` and `codemap sync` run for every repo; other commands ask for `-C <repo>`.
+
 ## 4. Feature details
 
 ### 4.1 Shared map (requirement 1)

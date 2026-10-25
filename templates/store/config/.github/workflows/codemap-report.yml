@@ -3,8 +3,9 @@
 # and never pushes anywhere. The store repo's default branch must be `_config`.
 #
 # Setup (store repo -> Settings):
-#   Variables: SOURCE_REPOSITORY = owner/repo of the source, CODEKIT_REPO_URL = clone URL of codekit-y
-#   Secrets:   SOURCE_READ_TOKEN = fine-grained token with "Contents: read" on the source repo only
+#   Variables: SOURCE_REPOSITORIES = JSON list of the project's source repos, e.g. ["abc/abc-core","abc/abc-product"]
+#              CODEKIT_REPO_URL    = clone URL of codekit-y
+#   Secrets:   SOURCE_READ_TOKEN   = fine-grained token with "Contents: read" on those repos only
 name: codemap report
 
 on:
@@ -18,11 +19,15 @@ permissions:
 jobs:
   report:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ${{ fromJSON(vars.SOURCE_REPOSITORIES) }}
     steps:
       - name: Check out the source repo (read-only)
         uses: actions/checkout@v4
         with:
-          repository: ${{ vars.SOURCE_REPOSITORY }}
+          repository: ${{ matrix.source }}
           token: ${{ secrets.SOURCE_READ_TOKEN }}
           fetch-depth: 0
           path: source
@@ -31,7 +36,7 @@ jobs:
       - name: Fetch all source branches
         env:
           TOKEN: ${{ secrets.SOURCE_READ_TOKEN }}
-        run: git -C source fetch --quiet --no-tags "https://x-access-token:${TOKEN}@github.com/${{ vars.SOURCE_REPOSITORY }}.git" '+refs/heads/*:refs/remotes/origin/*'
+        run: git -C source fetch --quiet --no-tags "https://x-access-token:${TOKEN}@github.com/${{ matrix.source }}.git" '+refs/heads/*:refs/remotes/origin/*'
 
       - uses: actions/setup-node@v4
         with:

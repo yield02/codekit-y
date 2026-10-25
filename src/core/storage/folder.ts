@@ -26,12 +26,12 @@ interface BaseManifest {
 }
 
 /**
- * Shared-folder backend (NAS / network drive):
- *   config/            shared config area
- *   branches/<b>/      one directory per source branch
- *   history/YYYY-MM.jsonl  append-only write log
- *   locks/             TTL locks for merges
- *   archive/           archived branches
+ * Shared-folder backend (NAS / network drive), ONE per project, shared by all of its repos:
+ *   config/                        shared config area
+ *   repos/<repo>/branches/<b>/     one directory per source repo + branch
+ *   repos/<repo>/archive/          archived branches
+ *   history/YYYY-MM.jsonl          append-only write log
+ *   locks/                         TTL locks for merges
  */
 export class FolderStorage implements StorageAdapter {
   readonly kind = "folder" as const;
@@ -39,7 +39,24 @@ export class FolderStorage implements StorageAdapter {
   constructor(
     readonly root: string,
     private readonly actor: string,
+    /** Source repo whose branches this instance serves; omit for config-only use. */
+    readonly repo?: string,
   ) {}
+
+  forRepo(repo: string): FolderStorage {
+    return new FolderStorage(this.root, this.actor, repo);
+  }
+
+  listRepos(): string[] {
+    const dir = join(this.root, "repos");
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+  }
+
+  private repoDir(): string {
+    if (!this.repo) throw new Error("FolderStorage: branch operations need a repo (use forRepo)");
+    return join(this.root, "repos", this.repo);
+  }
 
   refresh(): void {
     if (!existsSync(this.root)) throw new Error(`Knowledge store folder not found: ${this.root}`);
@@ -55,7 +72,7 @@ export class FolderStorage implements StorageAdapter {
   }
 
   listBranches(): string[] {
-    const dir = join(this.root, "branches");
+    const dir = join(this.repoDir(), "branches");
     if (!existsSync(dir)) return [];
     return readdirSync(dir, { withFileTypes: true })
       .filter((d) => d.isDirectory())
@@ -81,7 +98,7 @@ export class FolderStorage implements StorageAdapter {
   archiveBranch(branch: string): void {
     const dir = this.branchDir(branch);
     if (!existsSync(dir)) return;
-    const target = join(this.root, "archive", `${normalizeBranch(branch)}-${Date.now()}`);
+    const target = join(this.repoDir(), "archive", `${normalizeBranch(branch)}-${Date.now()}`);
     mkdirSync(dirname(target), { recursive: true });
     renameSync(dir, target);
     this.log({ branch, action: "archive", target });
@@ -135,11 +152,11 @@ export class FolderStorage implements StorageAdapter {
   }
 
   private branchDir(branch: string): string {
-    return join(this.root, "branches", normalizeBranch(branch));
+    return join(this.repoDir(), "branches", normalizeBranch(branch));
   }
 
   private branchNameOf(dirName: string): string {
-    const lineage = readText(join(this.root, "branches", dirName, "lineage", `${dirName}.json`));
+    const lineage = readText(join(this.repoDir(), "branches", dirName, "lineage", `${dirName}.json`));
     if (lineage) {
       try {
         const parsed = JSON.parse(lineage) as { branch?: string };
@@ -178,7 +195,7 @@ export class FolderStorage implements StorageAdapter {
   private withLock<T>(branch: string, fn: () => T): T {
     const lockDir = join(this.root, "locks");
     mkdirSync(lockDir, { recursive: true });
-    const lock = join(lockDir, `${normalizeBranch(branch)}.lock`);
+    const lock = join(lockDir, `${this.repo ?? "_"}__${normalizeBranch(branch)}.lock`);
     if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > LOCK_TTL_MS) rmSync(lock, { force: true });
     try {
       writeFileSync(lock, JSON.stringify({ by: this.actor, at: new Date().toISOString() }), { flag: "wx" });
@@ -196,7 +213,7 @@ export class FolderStorage implements StorageAdapter {
     const at = new Date().toISOString();
     const dir = join(this.root, "history");
     mkdirSync(dir, { recursive: true });
-    appendFileSync(join(dir, `${at.slice(0, 7)}.jsonl`), JSON.stringify({ at, by: this.actor, ...entry }) + "\n");
+    appendFileSync(join(dir, `${at.slice(0, 7)}.jsonl`), JSON.stringify({ at, by: this.actor, ...(this.repo ? { repo: this.repo } : {}), ...entry }) + "\n");
   }
 }
 

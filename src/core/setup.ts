@@ -1,9 +1,9 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { loadUserConfig, saveUserConfig, upsertProject, type BackendKind, type ProjectEntry } from "./config.js";
+import { basename, join } from "node:path";
+import { addRepoToStoreConfig, loadUserConfig, parseStoreConfig, repoNameFromRemote, repoNameInStore, saveUserConfig, upsertRepo, type BackendKind, type ProjectEntry, type RepoEntry } from "./config.js";
 import { normalizeRemote } from "./git.js";
+import { repoFoldersUnder } from "./parent.js";
 import { AGENT_ENV_MARKERS } from "./guard.js";
-import { writeLineage } from "./lineage.js";
 import { packageRoot, projectStoreDir, toPosix } from "./paths.js";
 import { SourceRepo } from "./source.js";
 import { FolderStorage } from "./storage/folder.js";
@@ -41,7 +41,10 @@ export interface CreateStoreOptions {
   actor: string;
 }
 
-/** Scaffold a new knowledge store: config area from templates + a root map for the default branch. */
+/**
+ * Scaffold a project's knowledge store: the shared config area from templates.
+ * Map branches are created per repo on first use (`ensureBranch`).
+ */
 export function createProjectStore(opts: CreateStoreOptions): StorageAdapter {
   const defaultBranch = opts.defaultBranch ?? "main";
   const files = templateFiles(opts.project, defaultBranch);
@@ -60,17 +63,6 @@ export function createProjectStore(opts: CreateStoreOptions): StorageAdapter {
       store.writeConfig(rel, content, "initialize knowledge store config");
     }
   }
-  store.createBranch(defaultBranch, null);
-  const now = new Date().toISOString();
-  writeLineage(store, {
-    branch: defaultBranch,
-    parent: null,
-    baseCommit: null,
-    createdBy: opts.actor,
-    createdAt: now,
-    status: "active",
-    events: [{ event: "create", at: now, by: opts.actor }],
-  }, `lineage: create ${defaultBranch}`);
   return store;
 }
 
@@ -80,10 +72,18 @@ export interface InitOptions {
   backend: BackendKind;
   url?: string;
   path?: string;
+  /** Key of this repo inside the project (default: derived from the remote, e.g. `abc-core`). */
+  repoName?: string;
+  /** Name to use when the store does not know this repo yet and no repoName is given (e.g. its folder name). */
+  defaultName?: string;
 }
 
-/** Register the current source repo with a project's store (per developer, once per project). */
-export function initRepo(opts: InitOptions): { entry: ProjectEntry; source: SourceRepo; guard: GuardInstallResult } {
+/**
+ * Register a source repo with its project's store (per developer, once per repo).
+ * Every repo of a project (core, product, …) is registered with the same --project and
+ * the same store: their maps are kept side by side in that one store.
+ */
+export function initRepo(opts: InitOptions): { entry: ProjectEntry; repo: RepoEntry; source: SourceRepo; guard: GuardInstallResult } {
   const source = SourceRepo.open(opts.cwd);
   if (!source) throw new Error(`Not a git repository: ${opts.cwd}`);
   const remote = source.remoteUrl();
@@ -91,19 +91,45 @@ export function initRepo(opts: InitOptions): { entry: ProjectEntry; source: Sour
 
   const config = loadUserConfig();
   const existing = config.projects.find((p) => p.name === opts.project);
-  const entry: ProjectEntry = {
-    name: opts.project,
-    remotes: [...new Set([...(existing?.remotes ?? []), normalizeRemote(remote)])],
-    store: { backend: opts.backend, ...(opts.url ? { url: opts.url } : {}), ...(opts.path ? { path: opts.path } : {}) },
-  };
-  saveUserConfig(upsertProject(config, entry));
+  const store = { backend: opts.backend, ...(opts.url ? { url: opts.url } : {}), ...(opts.path ? { path: opts.path } : {}) };
+  if (existing && (existing.store.backend !== store.backend || (existing.store.url ?? existing.store.path) !== (store.url ?? store.path))) {
+    throw new Error(`Project ${opts.project} already uses store ${existing.store.url ?? existing.store.path} (${existing.store.backend}); all repos of a project share one store.`);
+  }
+  const storage: StorageAdapter = store.backend === "git" ? new GitStorage(projectStoreDir(opts.project), store.url) : new FolderStorage(store.path!, "codekit");
+  storage.refresh();
 
-  if (entry.store.backend === "git") new GitStorage(projectStoreDir(entry.name), entry.store.url).refresh();
-  else new FolderStorage(entry.store.path!, "codekit").refresh();
+  // The store decides repo names, so every developer's maps land in the same place.
+  const storeYaml = storage.readConfig("codekit.yaml") ?? "";
+  const known = repoNameInStore(parseStoreConfig(storeYaml, opts.project), remote);
+  if (known && opts.repoName && opts.repoName !== known) {
+    throw new Error(`The team's store already names this repo "${known}"; drop --repo-name or use "${known}".`);
+  }
+  const name = known ?? opts.repoName ?? opts.defaultName ?? repoNameFromRemote(remote);
+  const taken = parseStoreConfig(storeYaml, opts.project).repos[name]?.remote;
+  if (!known && taken && normalizeRemote(taken) !== normalizeRemote(remote)) {
+    throw new Error(`Repo name "${name}" is already used in the store by ${taken}; pass a different --repo-name.`);
+  }
+  const repo: RepoEntry = { name, remote: normalizeRemote(remote), localPath: source.root };
+  const next = upsertRepo(config, opts.project, store, repo);
+  saveUserConfig(next);
+  const entry = next.projects.find((p) => p.name === opts.project)!;
+  if (!known) storage.writeConfig("codekit.yaml", addRepoToStoreConfig(storeYaml, name, remote), `config: add repo ${name}`);
 
   addLocalExcludes(source);
   const guard = installPrePushGuard(source);
-  return { entry, source, guard };
+  return { entry, repo, source, guard };
+}
+
+/** `Transactions` -> `transactions`, `Admin Portal` -> `admin-portal` */
+export function repoNameFromFolder(folder: string): string {
+  return basename(folder).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "repo";
+}
+
+/** Register every git repo under a parent folder (Transfer/{Transactions,Core,Abs,Admin}) with one project. */
+export function initAll(opts: Omit<InitOptions, "cwd" | "repoName" | "defaultName"> & { parent: string }) {
+  const folders = repoFoldersUnder(opts.parent);
+  if (folders.length === 0) throw new Error(`No git repos with an origin remote under ${opts.parent}.`);
+  return folders.map((dir) => initRepo({ ...opts, cwd: dir, defaultName: repoNameFromFolder(dir) }));
 }
 
 export const PRE_PUSH_MARKER = "codekit-push-guard";

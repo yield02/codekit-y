@@ -26,7 +26,19 @@ export interface MergeSummary {
  */
 export function ensureBranch(ws: Workspace): SyncReport["created"] | undefined {
   if (ws.store.hasBranch(ws.branch)) return undefined;
-  const existing = ws.store.listBranches();
+  let existing = ws.store.listBranches();
+  // First use of this repo in the store: root its maps at the default branch, so a
+  // developer who starts on a feature branch still gets a proper parent.
+  const root = ws.config.defaultBranch;
+  if (existing.length === 0 && ws.branch !== root && ws.source.branchExists(root)) {
+    ws.store.createBranch(root, null);
+    const now = new Date().toISOString();
+    writeLineage(ws.store, {
+      branch: root, parent: null, baseCommit: ws.source.resolveBranch(root), createdBy: ws.actor, createdAt: now, status: "active",
+      events: [{ event: "create", at: now, by: ws.actor }],
+    }, `lineage: create ${root} (root of ${ws.repo.name})`);
+    existing = [root];
+  }
   const parent = existing.length ? ws.source.detectParent(ws.branch, existing) : null;
   ws.store.createBranch(ws.branch, parent);
   const head = ws.source.head();
