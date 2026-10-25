@@ -31,7 +31,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm run build
-      - run: npm test
+      # github-actions reporter: failures become annotations (readable without log access)
+      - run: npx vitest run --reporter=default --reporter=github-actions
       - name: CLI smoke test
         if: runner.os != 'Windows'
         run: bash test/smoke/cli-smoke.sh
