@@ -15,6 +15,8 @@ public sealed class CorrelationIdMiddleware
 {
     private static readonly TaggedLogger Log = TaggedLogger.For<CorrelationIdMiddleware>();
     private static readonly string[] HttpTags = ["http"];
+    private static readonly double SlowRequestMs =
+        double.TryParse(Environment.GetEnvironmentVariable("LOG_SLOW_REQUEST_MS"), out var ms) ? ms : 1000;
 
     private readonly RequestDelegate _next;
 
@@ -38,20 +40,26 @@ public sealed class CorrelationIdMiddleware
         var path = context.Request.Path.Value ?? "/"; // never log the query string: it may hold secrets
         var start = Stopwatch.GetTimestamp();
 
-        Log.Info(HttpTags, "Request started", new { method, path });
+        // One info line per request; "started" only at debug. Disable Microsoft.AspNetCore request logging to avoid duplicates.
+        Log.Debug(HttpTags, "Request started", new { method, path });
         try
         {
             await _next(context);
         }
         catch (Exception ex)
         {
+            // Unhandled here means nobody logged it yet: this is the single error line for the failure.
             Log.Error(HttpTags, "Request failed", ex, new { method, path, status = StatusCodes.Status500InternalServerError },
                 Stopwatch.GetElapsedTime(start).TotalMilliseconds);
             throw;
         }
 
-        Log.Info(HttpTags, "Request finished", new { method, path, status = context.Response.StatusCode },
-            Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+        var elapsed = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        var ctx = new { method, path, status = context.Response.StatusCode };
+        if (elapsed > SlowRequestMs)
+            Log.Warn(HttpTags, "Slow request", ctx, elapsed);
+        else
+            Log.Info(HttpTags, "Request finished", ctx, elapsed);
     }
 }
 

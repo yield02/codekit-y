@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { Command } from "commander";
 import { loadUserConfig } from "../core/config.js";
 import { tryGit } from "../core/git.js";
 import { readLineage } from "../core/lineage.js";
+import { formatLog, formatNoiseReport, matches, noiseReport, parseLogLine, sinceToIso, type ParsedLog } from "../core/logview.js";
 import { packageRoot, userConfigPath } from "../core/paths.js";
 import { createProjectStore, initRepo, prePushGuardInstalled } from "../core/setup.js";
 import { applyChanges, defaultToolDirs, planCursor, planVsCode, USER_RULES, VSCODE_SETTINGS_SNIPPET } from "../core/tools-setup.js";
@@ -100,6 +102,56 @@ program
       "VS Code: add to your user settings.json so agent pushes always need your approval:",
       JSON.stringify(VSCODE_SETTINGS_SNIPPET, null, 2),
     ].join("\n"), false);
+  });
+
+program
+  .command("logs")
+  .description("Read convention JSON logs (any stack): filter, trace one request, or find the noisiest messages")
+  .argument("[files...]", "log files (default: stdin)")
+  .option("--cid <id>", "correlationId (full, or last 6+ chars as shown in pretty lines)")
+  .option("-t, --tag <tag...>", "keep lines with any of these tags")
+  .option("-l, --level <level>", "minimum level: debug | info | warn | error")
+  .option("--logger <name>", "logger name contains")
+  .option("--service <name>", "service equals")
+  .option("-g, --grep <text>", "text in message, context or error")
+  .option("--since <when>", "ISO time or relative (15m, 2h, 1d)")
+  .option("--trace <cid>", "timeline of one request across services, +ms from its first line, with stacks")
+  .option("--stats", "noise report: volume by level/message/logger and over-logging hints")
+  .option("--show-logger", "print service/logger on each line")
+  .option("--stack", "print error stacks")
+  .option("--no-color", "plain output")
+  .option("--json", "output matching lines as JSON")
+  .action(async (files: string[], o: { cid?: string; tag?: string[]; level?: string; logger?: string; service?: string; grep?: string; since?: string; trace?: string; stats?: boolean; showLogger?: boolean; stack?: boolean; color: boolean; json?: boolean }) => {
+    const filter = { cid: o.trace ?? o.cid, tags: o.tag, level: o.level, logger: o.logger, service: o.service, grep: o.grep, since: o.since };
+    const sinceIso = o.since ? sinceToIso(o.since) : undefined;
+    const color = o.color && !!process.stdout.isTTY;
+    const collected: ParsedLog[] = [];
+    const streaming = !o.trace && !o.stats;
+    const inputs = files.length ? files.map((f) => createReadStream(f)) : [process.stdin];
+    for (const input of inputs) {
+      for await (const raw of createInterface({ input, crlfDelay: Infinity })) {
+        const log = parseLogLine(raw);
+        if (!log) {
+          if (streaming && !Object.values(filter).some(Boolean) && !o.json && raw.trim()) process.stdout.write(raw + "\n"); // pass non-JSON lines through
+          continue;
+        }
+        if (!matches(log, filter, sinceIso)) continue;
+        if (streaming) process.stdout.write((o.json ? JSON.stringify(log) : formatLog(log, { color, showLogger: o.showLogger, showStack: o.stack })) + "\n");
+        else collected.push(log);
+      }
+    }
+    if (o.stats) return print(formatNoiseReport(noiseReport(collected)), false);
+    if (o.trace) {
+      collected.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+      if (!collected.length) return print(`No lines for correlationId ${o.trace}.`, false);
+      const first = collected[0]!;
+      const total = Date.parse(collected.at(-1)!.timestamp) - Date.parse(first.timestamp);
+      const services = [...new Set(collected.map((l) => l.service).filter(Boolean))];
+      print([
+        `Request ${first.correlationId} · ${collected.length} lines · ${total}ms · services: ${services.join(", ") || "-"} · started ${first.timestamp}`,
+        ...collected.map((l) => formatLog(l, { color, showLogger: true, showStack: true, relativeTo: first.timestamp })),
+      ].join("\n"), false);
+    }
   });
 
 program

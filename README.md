@@ -78,6 +78,7 @@ Optionally run `npm link` to get `codekit`, `codemap` and `codemap-mcp` on your 
 | `codekit setup-tools [--cursor] [--vscode] [--dry-run]` | Write user-level Cursor/VS Code config, with backups (MCP, guard hooks, instructions) |
 | `codekit mcp-config` | Print MCP snippets for Cursor and VS Code |
 | `codekit doctor` | Check the setup |
+| `codekit logs [files] [--cid] [--tag] [--level] [--trace <cid>] [--stats]` | Read convention JSON logs from any stack: filter, trace one request, or run a noise report |
 | `codemap status [paths...]` | Coverage plus missing and stale maps |
 | `codemap lookup <paths...>` | Show maps |
 | `codemap sync [--no-github]` | Detect new branches, syncs and merges (squash PRs via the GitHub API, GET only), and update maps |
@@ -92,7 +93,7 @@ Optionally run `npm link` to get `codekit`, `codemap` and `codemap-mcp` on your 
 - **Map:** `codemap_context`, `codemap_lookup`, `codemap_write`, `codemap_search`
 - **Plans:** `plan_save`, `plan_list`
 - **Naming convention:** `naming_list`, `naming_add_rule`, `naming_edit_rule`
-- **Logging convention:** `logging_convention`, `logging_add_tag`, `logging_sample`
+- **Logging convention:** `logging_convention`, `logging_add_tag`, `logging_detect`, `logging_sample` (with an adoption guide for an existing library or in-house logger), `logging_set_project`
 
 ## Repository layout
 ```
@@ -100,7 +101,7 @@ src/core/        map model, hashing, storage adapters (git | folder), sync/merge
 src/cli/         codekit and codemap CLIs
 src/mcp/         codemap-mcp server (stdio)
 plugins/codekit/ Claude Code plugin: hooks (incl. push guard), skills (codemap, naming, logging), bundled MCP server
-logging/         reference logging implementations: node, python (tested), java, dotnet
+logging/         reference logging implementations (node, python tested; java, dotnet) + adapters/ guides for existing libraries and in-house loggers
 templates/store/ knowledge store skeleton: codekit.yaml, rules/AGENTS.md, conventions/*.md
 test/            unit, storage-contract (both backends) and end-to-end tests
 ```

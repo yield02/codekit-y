@@ -6,7 +6,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { listPlans, lookup, readPlan, savePlan, search, writeMap } from "../core/codemap.js";
 import { MCP_INSTRUCTIONS, buildContextText } from "../core/context.js";
-import { addLogTag, addNamingRule, editNamingRule, parseLogTags, parseNamingRules } from "../core/conventions.js";
+import { addLogTag, addNamingRule, editNamingRule, parseLogTags, parseNamingRules, parseProjectLogger, setProjectLogger } from "../core/conventions.js";
+import { detectLogging, formatDetection } from "../core/logging-detect.js";
 import { createLogger, withCorrelation } from "../core/logger.js";
 import { detectPrMerges } from "../core/github.js";
 import { packageRoot } from "../core/paths.js";
@@ -167,10 +168,37 @@ export function createServer(): McpServer {
     ws.store.readConfig("conventions/logging.md") ?? "No logging convention defined.");
 
   tool(
+    "logging_detect",
+    "Scan the source repo (read-only) for its existing logging: libraries, the project's own logger code, raw print/console calls. Call this BEFORE adding or changing logging; it returns the adoption strategy.",
+    {},
+    (_args, ws) => formatDetection(detectLogging(ws)),
+  );
+
+  tool(
     "logging_sample",
-    "Reference implementation of the logging convention for a stack (logger wrapper, correlationId middleware, propagation, lint config). Adapt names to the project's naming convention when copying.",
-    { stack: z.enum(["node", "java", "dotnet", "python"]) },
-    (args) => readSample(args.stack),
+    "Reference implementation of the logging convention for a stack, plus the adoption guide when the project already uses a library or its own logger. Adapt names to the project's naming convention; never add a second logger.",
+    {
+      stack: z.enum(["node", "java", "dotnet", "python"]),
+      library: z.string().optional().describe("Existing library (e.g. log4j2, nlog, microsoft-logging, winston, bunyan, loguru, structlog) or 'in-house' for the project's own logger"),
+    },
+    (args) => readSample(args.stack, args.library),
+  );
+
+  tool(
+    "logging_set_project",
+    "Record the project's logging entry point in the logging convention (after adopting it), so every agent uses the same logger.",
+    {
+      library: z.string().optional(),
+      entryPoint: z.string().optional().describe("Module/class developers call, e.g. src/common/logger.ts"),
+      notes: z.string().optional(),
+    },
+    (args, ws) => {
+      const md = ws.store.readConfig("conventions/logging.md") ?? "# Logging convention\n";
+      const next = setProjectLogger(md, args);
+      ws.store.writeConfig("conventions/logging.md", next, "logging: set project logger");
+      const p = parseProjectLogger(next);
+      return `Project logger: library=${p?.library || "-"}, entryPoint=${p?.entryPoint || "-"}, notes=${p?.notes || "-"}`;
+    },
   );
 
   tool("logging_add_tag", "Register a new log tag (kebab-case) in the tag registry.", { tag: z.string(), description: z.string().min(1) }, (args, ws) => {
@@ -182,10 +210,24 @@ export function createServer(): McpServer {
   return server;
 }
 
-/** All text files of `logging/<stack>/`, concatenated with path headers. */
-export function readSample(stack: string): string {
+/**
+ * All text files of `logging/<stack>/`, concatenated with path headers, preceded by the
+ * adoption guide when the project already has a library or its own logger.
+ */
+export function readSample(stack: string, library?: string): string {
   const root = join(packageRoot(), "logging", stack);
   if (!existsSync(root)) return `No sample for ${stack} in this kit build.`;
+  const adapters = join(packageRoot(), "logging", "adapters");
+  const lib = library?.toLowerCase().replace(/[^a-z0-9-]/g, "");
+  const inHouse = join(adapters, "in-house.md");
+  const guideFile = !lib ? null : ["in-house", "inhouse", "custom"].includes(lib) ? "in-house.md" : `${stack}-${lib}.md`;
+  let guide = "";
+  if (guideFile && existsSync(join(adapters, guideFile))) {
+    guide = `=== logging/adapters/${guideFile}\n${readFileSync(join(adapters, guideFile), "utf8")}`;
+  } else if (guideFile) {
+    guide = `(No dedicated guide for "${library}" on ${stack}: treat it like the project's own logger.)\n` +
+      (existsSync(inHouse) ? `=== logging/adapters/in-house.md\n${readFileSync(inHouse, "utf8")}` : "");
+  }
   const files: string[] = [];
   const walk = (rel: string) => {
     for (const e of readdirSync(join(root, rel), { withFileTypes: true })) {
@@ -195,9 +237,11 @@ export function readSample(stack: string): string {
     }
   };
   walk("");
-  return files.sort((a, b) => (a === "README.md" ? -1 : b === "README.md" ? 1 : a.localeCompare(b)))
+  const sample = files.sort((a, b) => (a === "README.md" ? -1 : b === "README.md" ? 1 : a.localeCompare(b)))
     .map((f) => `=== logging/${stack}/${f}\n${readFileSync(join(root, f), "utf8")}`)
     .join("\n\n");
+  // The guide comes first: it says which parts of the sample to reuse.
+  return guide ? `${guide}\n\n${sample}` : sample;
 }
 
 function formatMeta(meta: { sourceHash: string; updatedAt: string; updatedBy: string; dependsOn: string[]; tags: string[] }): string {

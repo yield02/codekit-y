@@ -76,6 +76,42 @@ def httpx_event_hook(request: Any) -> None:
         request.headers.setdefault(key, value)
 
 
+# ------------------------------------------------------------------ noise and safety limits
+
+_SECRET_KEY = re.compile(r"pass(word|wd)?|secret|token|authorization|cookie|api[-_]?key|card", re.I)
+MAX_STRING, MAX_ITEMS, MAX_DEPTH, MAX_KEYS = 500, 20, 3, 20
+REPEAT_WINDOW_S = 60.0
+
+
+def sanitize(value: Any, depth: int = 0, key: str = "") -> Any:
+    """Redact secrets and bound sizes so a log line never carries payloads or credentials."""
+    if key and _SECRET_KEY.search(key):
+        return "[redacted]"
+    if isinstance(value, str):
+        return value if len(value) <= MAX_STRING else f"{value[:MAX_STRING]}…(+{len(value) - MAX_STRING})"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if depth >= MAX_DEPTH:
+        return f"[list({len(value)})]" if isinstance(value, (list, tuple, set)) else "[object]"
+    if isinstance(value, (list, tuple, set)):
+        items = [sanitize(v, depth + 1) for v in list(value)[:MAX_ITEMS]]
+        return items + [f"…(+{len(value) - MAX_ITEMS})"] if len(value) > MAX_ITEMS else items
+    if isinstance(value, Mapping):
+        entries = list(value.items())
+        out = {str(k): sanitize(v, depth + 1, str(k)) for k, v in entries[:MAX_KEYS]}
+        if len(entries) > MAX_KEYS:
+            out["…"] = f"+{len(entries) - MAX_KEYS} keys"
+        return out
+    return sanitize(str(value), depth, key)
+
+
+def _error_stack(exc: BaseException) -> str:
+    # format_exception already follows __cause__ / __context__ chains
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+
 # ------------------------------------------------------------------ formatting
 
 def _entry(record: logging.LogRecord, service: str) -> dict[str, Any]:
@@ -83,19 +119,20 @@ def _entry(record: logging.LogRecord, service: str) -> dict[str, Any]:
         "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "level": record.levelname.lower().replace("warning", "warn"),
         "service": service,
+        "logger": record.name,
         "correlationId": getattr(record, "correlation_id", None) or current_correlation_id() or "none",
-        "tags": list(getattr(record, "tags", None) or ["untagged"]),
+        "tags": list(getattr(record, "tags", None) or ["legacy"]),  # records from plain logging calls
         "message": record.getMessage(),
     }
     context = getattr(record, "context", None)
     if context:
-        entry["context"] = context
+        entry["context"] = sanitize(context)
     duration = getattr(record, "duration_ms", None)
     if duration is not None:
         entry["durationMs"] = duration
     if record.exc_info and record.exc_info[1] is not None:
         exc = record.exc_info[1]
-        entry["error"] = {"type": type(exc).__name__, "message": str(exc), "stack": "".join(traceback.format_exception(*record.exc_info))}
+        entry["error"] = {"type": type(exc).__name__, "message": str(exc), "stack": _error_stack(exc)}
     return entry
 
 
@@ -130,14 +167,28 @@ def format_pretty(e: Mapping[str, Any]) -> str:
 class TaggedLogger:
     """Wrapper with mandatory tags: log.info(["auth"], "Login success", {"user_id": 42, "duration_ms": 12})."""
 
+    _repeats: dict[str, list[float]] = {}  # key -> [window start, suppressed count]
+
     def __init__(self, logger: logging.Logger) -> None:
         self._logger = logger
 
     def _log(self, level: int, tags: Sequence[str], message: str, context: Mapping[str, Any] | None, exc: BaseException | None = None) -> None:
         if not tags or isinstance(tags, str):
             raise ValueError("log entries need a non-empty list of tags")
+        if not self._logger.isEnabledFor(level):
+            return
         ctx = dict(context or {})
         duration = ctx.pop("duration_ms", ctx.pop("durationMs", None))
+        if level >= logging.ERROR:
+            # The same error from the same logger is written once per window; the next write carries the count.
+            key, now = f"{self._logger.name}|{message}", time.monotonic()
+            seen = TaggedLogger._repeats.get(key)
+            if seen and now - seen[0] < REPEAT_WINDOW_S:
+                seen[1] += 1
+                return
+            if seen and seen[1]:
+                ctx["repeated"] = int(seen[1])
+            TaggedLogger._repeats[key] = [now, 0]
         extra = {"tags": list(tags), "context": ctx or None, "duration_ms": duration, "correlation_id": current_correlation_id()}
         exc_info = (type(exc), exc, exc.__traceback__) if exc is not None else None
         self._logger.log(level, message, extra=extra, exc_info=exc_info, stacklevel=3)
@@ -172,6 +223,17 @@ def get_logger(name: str) -> TaggedLogger:
 # ------------------------------------------------------------------ HTTP middleware
 
 _http_log = get_logger("http")
+SLOW_REQUEST_MS = int(os.environ.get("LOG_SLOW_REQUEST_MS", "1000"))
+
+
+def _log_request(method: Any, path: Any, status: int, started: float) -> None:
+    """One info line per request (warn when slow). Disable the framework's access log to avoid duplicates."""
+    duration = round((time.perf_counter() - started) * 1000)
+    ctx = {"method": method, "path": path, "status": status, "duration_ms": duration}
+    if duration > SLOW_REQUEST_MS:
+        _http_log.warn(["http"], "Slow request", {**ctx, "slow_ms": SLOW_REQUEST_MS})
+    else:
+        _http_log.info(["http"], "Request finished", ctx)
 
 
 class CorrelationIdMiddleware:
@@ -189,7 +251,7 @@ class CorrelationIdMiddleware:
             started = time.perf_counter()
             status = {"code": 500}
             method, path = scope.get("method"), scope.get("path")
-            _http_log.info(["http"], "Request started", {"method": method, "path": path})
+            _http_log.debug(["http"], "Request started", {"method": method, "path": path})
 
             async def send_wrapper(message: dict[str, Any]) -> None:
                 if message["type"] == "http.response.start":
@@ -201,7 +263,7 @@ class CorrelationIdMiddleware:
             try:
                 await self.app(scope, receive, send_wrapper)
             finally:
-                _http_log.info(["http"], "Request finished", {"method": method, "path": path, "status": status["code"], "duration_ms": round((time.perf_counter() - started) * 1000)})
+                _log_request(method, path, status["code"], started)
 
 
 class DjangoCorrelationIdMiddleware:
@@ -215,5 +277,5 @@ class DjangoCorrelationIdMiddleware:
             started = time.perf_counter()
             response = self.get_response(request)
             response[CORRELATION_HEADER] = cid
-            _http_log.info(["http"], "Request finished", {"method": request.method, "path": request.path, "status": response.status_code, "duration_ms": round((time.perf_counter() - started) * 1000)})
+            _log_request(request.method, request.path, response.status_code, started)
             return response

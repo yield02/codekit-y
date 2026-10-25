@@ -34,6 +34,17 @@ app.post("/orders", async (req, res) => {
   ```
 - Background jobs and queue consumers wrap their work in `withCorrelationId(message.headers["x-correlation-id"], () => handle(message))`.
 
+## Built in: debuggable, not noisy
+- `logger` field. Use `log.child("OrderService")` per module so every line says where it came from.
+- One `info` line per request (`Request finished`, with `durationMs`). It becomes `warn` `Slow request` above `slowMs` (default 1000). `Request started` is `debug`. Disable the framework's access log.
+- `context` is sanitized:
+  - keys like `password`, `token`, `authorization`, `cookie`, `apiKey` and `card` become `[redacted]`
+  - strings over 500 characters, arrays over 20 items, nesting deeper than 3 levels and more than 20 keys are truncated
+- Errors keep the `cause` chain in `error.stack`.
+- The same error from the same logger is written once per 60 s. The next write carries `context.repeated`.
+- `debug` is off unless `LOG_LEVEL=debug`.
+- `codekit logs --stats` on a log file shows the noisiest messages.
+
 ## Tests
 ```bash
 node --test test/logging.test.ts     # Node 22.6+ (type stripping), after npm i pino

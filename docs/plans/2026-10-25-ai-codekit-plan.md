@@ -180,6 +180,27 @@ Body: `## Purpose` · `## Public API` · `## Main flow` · `## Caveats` (limit ~
 - Lint rules banning raw loggers (ESLint `no-console`, ArchUnit, BannedApiAnalyzers, ruff `TID251`): optional, when the project agrees.
 - `codemap`/`codemap-mcp` themselves log to this standard in `~/.codekit/logs/` (`tags: [codemap, mcp|hook|sync]`).
 
+**Projects that already log** (library or their own logger code): never add a second logger. `logging_detect` scans the repo read-only and returns the strategy:
+- `in-house`: extend the project's logger. Add tags with a `legacy` default for old calls, read the correlationId from context, change the output.
+- `library`: keep the library. Configure its formatter and context, and add a thin tagged wrapper.
+- `reference-sample`: the project has no logging yet. Adapt the reference sample.
+
+Adoption guides live in `logging/adapters/`: log4j2, NLog, Microsoft.Extensions.Logging, winston, bunyan, loguru, structlog, and in-house loggers. `logging_set_project` records the entry point in the convention.
+
+**Debuggable without over-logging.** The convention defines the levels (`debug` is off in production) and a "what to log" / "what not to log" list:
+- one line per request or job
+- one `error` per failure, carrying the ids needed to reproduce it
+- no logging in loops, no log-and-rethrow, no payloads, no secrets
+
+The wrapper enforces it in code:
+- a `logger` field on every line
+- redaction and size limits on `context`
+- the `cause` chain in `error.stack`
+- repeated errors collapsed to one line per 60 s
+- a single request line, raised to `warn` when the request is slow
+
+`codekit logs` reads any stack's JSON logs. It filters by correlationId (including the short id printed in pretty lines), tag, level, logger, text and time. `--trace` shows the timeline of one request, and `--stats` prints a noise report with over-logging hints.
+
 ### 4.7 Push guard — source repos are read + local-commit only (strict)
 AI agents may read, edit and commit **locally** in a registered source repo, but must **never** push or write to its remote. The developer reviews and pushes. Three independent layers enforce this:
 

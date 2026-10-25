@@ -128,3 +128,53 @@ function escapeRe(v: string): string {
 function normalize(v: string): string {
   return v.toLowerCase().replace(/\s+/g, " ").trim();
 }
+
+export interface ProjectLogger {
+  library: string;
+  entryPoint: string;
+  notes: string;
+}
+
+const PROJECT_LOGGER_KEYS = ["library", "entryPoint", "notes"] as const;
+
+/** The `## Project logger` key/value table in logging.md. */
+export function parseProjectLogger(md: string): ProjectLogger | null {
+  const lines = md.replace(/\r\n/g, "\n").split("\n");
+  const start = lines.findIndex((l) => /^##\s+Project logger/i.test(l));
+  if (start === -1) return null;
+  const out: Record<string, string> = {};
+  for (let i = start + 1; i < lines.length && !/^##\s/.test(lines[i]!); i++) {
+    const [key, value] = splitRow(lines[i]!);
+    if (key && (PROJECT_LOGGER_KEYS as readonly string[]).includes(key)) out[key] = value ?? "";
+  }
+  const set = (v: string | undefined) => (v && v !== "(not set)" ? v : "");
+  const result = { library: set(out.library), entryPoint: set(out.entryPoint), notes: set(out.notes) };
+  return result.library || result.entryPoint || result.notes ? result : null;
+}
+
+export function setProjectLogger(md: string, value: Partial<ProjectLogger>): string {
+  const current = parseProjectLogger(md) ?? { library: "", entryPoint: "", notes: "" };
+  const next: ProjectLogger = { ...current, ...Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) };
+  const table = [
+    "| Key | Value |",
+    "|---|---|",
+    ...PROJECT_LOGGER_KEYS.map((k) => `| ${k} | ${escapeCell(next[k] || "(not set)")} |`),
+  ];
+  const lines = md.replace(/\r\n/g, "\n").split("\n");
+  const start = lines.findIndex((l) => /^##\s+Project logger/i.test(l));
+  if (start === -1) {
+    const tagIdx = lines.findIndex((l) => /^##\s+Tag registry/i.test(l));
+    const block = ["## Project logger", "", ...table, ""];
+    if (tagIdx === -1) return `${md.replace(/\s+$/, "")}\n\n${block.join("\n")}`;
+    lines.splice(tagIdx, 0, ...block);
+    return lines.join("\n");
+  }
+  let end = start + 1;
+  while (end < lines.length && !/^##\s/.test(lines[end]!)) end++;
+  const firstRow = lines.findIndex((l, i) => i > start && i < end && l.startsWith("|"));
+  let lastRow = firstRow;
+  while (lastRow + 1 < end && lines[lastRow + 1]!.startsWith("|")) lastRow++;
+  if (firstRow === -1) lines.splice(end, 0, ...table, "");
+  else lines.splice(firstRow, lastRow - firstRow + 1, ...table);
+  return lines.join("\n");
+}

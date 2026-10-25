@@ -98,3 +98,7 @@ using var _ = CorrelationId.BeginScope(message.Headers.GetValueOrDefault("X-Corr
   those banned too.
 - `Serilog.Formatting.Compact` is not needed: `JsonLogFormatter` replaces `CompactJsonFormatter` so the field names match
   the convention instead of `@t`, `@l`, `@m`.
+
+## Debuggable, not noisy
+- The HTTP filter/middleware writes one `info` line per request, or `warn` `Slow request` above the threshold (1000 ms by default). `Request started` is `debug` only. Turn off the framework's own request log so requests are not logged twice.
+- This sample does **not** yet redact secrets, bound `context` size or collapse repeated errors. Add these rules to the wrapper when adopting it. They are described in `logging/adapters/in-house.md` §4 and the Node/Python samples implement them.
