@@ -27,7 +27,7 @@ codekit enforces this with a PreToolUse guard and a `pre-push` hook — do not t
 ## 1. Look before you read
 1. `codemap_context` once per session (rules, conventions, coverage).
 2. `codemap_lookup` for the files you are about to open. If the map is `ok`, trust it and read source only for the exact lines you need.
-3. Serena symbol tools (`get_symbols_overview`, `find_symbol`, `find_referencing_symbols`) for structure.
+3. Serena symbol tools (`get_symbols_overview`, `find_symbol`, `find_referencing_symbols`) for structure. If Serena says no project is active, call `activate_project` with the repo root shown in `codemap_context`. Do not use Serena's memory or onboarding tools: codekit turns them off, and notes belong in codemap.
 4. Read whole source files only when the map is `missing` or `stale`.
 
 ## 2. Leave a map behind

@@ -40,7 +40,7 @@ export function clearTouches(ws: Workspace, sessionId: string): void {
 }
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-const SERENA_EDIT = /^mcp__.*serena.*__(replace|insert|create|delete|rename)/i;
+const SERENA_EDIT = /^mcp__.*serena.*__(replace|insert|create|delete|rename|safe_delete)/i;
 
 /** Extract the touched file from a PostToolUse payload. */
 export function touchFromToolUse(toolName: string, toolInput: Record<string, unknown> | undefined): { path: string; kind: TouchKind } | null {

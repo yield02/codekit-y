@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { MCP_INSTRUCTIONS } from "./context.js";
 import { packageRoot } from "./paths.js";
+import { serenaArgs } from "./serena.js";
 
 // User-level configuration for Cursor and VS Code (Copilot). Nothing is ever written
 // into a source repo. Existing files are merged, backed up, and left alone if unparsable.
@@ -37,6 +38,21 @@ function kitPath(...parts: string[]): string {
 
 function mcpServer() {
   return { command: "node", args: [kitPath("dist", "mcp", "main.js")] };
+}
+
+/** Our Serena entry is recognisable by the no-memories mode we add; a user's own entry is never replaced. */
+function isOurSerena(entry: unknown): boolean {
+  const args = (entry as { args?: unknown })?.args;
+  return Array.isArray(args) && args.includes("no-memories");
+}
+
+function withSerena(servers: Record<string, unknown>, entry: Record<string, unknown> | null, notes: string[]): Record<string, unknown> {
+  if (!entry) return servers;
+  if (servers.serena && !isOurSerena(servers.serena)) {
+    notes.push("an existing \"serena\" entry was kept as is (add --add-mode no-memories --open-web-dashboard False to it)");
+    return servers;
+  }
+  return { ...servers, serena: entry };
 }
 
 function hookCommand(event: string): string {
@@ -86,11 +102,19 @@ function planJsonMerge(file: string, merge: (current: Record<string, unknown>) =
   return { file, action: exists ? "update" : "create", detail: label, content };
 }
 
-export function planCursor(dirs: ToolDirs): PlannedChange[] {
+export interface SetupOptions {
+  /** Absolute path of the `serena` executable; when set, Serena is configured next to codemap. */
+  serena?: string | null;
+}
+
+export function planCursor(dirs: ToolDirs, opts: SetupOptions = {}): PlannedChange[] {
+  const notes: string[] = [];
+  const serena = opts.serena ? { command: opts.serena, args: serenaArgs("cursor") } : null;
   const mcp = planJsonMerge(join(dirs.cursorDir, "mcp.json"), (cur) => {
     const servers = (cur.mcpServers as Record<string, unknown>) ?? {};
-    return { ...cur, mcpServers: { ...servers, codemap: mcpServer() } };
-  }, "Cursor MCP server (codemap)");
+    return { ...cur, mcpServers: withSerena({ ...servers, codemap: mcpServer() }, serena, notes) };
+  }, `Cursor MCP servers (codemap${serena ? " + serena" : ""})`);
+  if (notes.length) mcp.detail += ` — ${notes.join("; ")}`;
 
   const hooks = planJsonMerge(join(dirs.cursorDir, "hooks.json"), (cur) => {
     const all = (cur.hooks as Record<string, { command: string }[]>) ?? {};
@@ -107,11 +131,14 @@ export function planCursor(dirs: ToolDirs): PlannedChange[] {
   return [mcp, hooks];
 }
 
-export function planVsCode(dirs: ToolDirs): PlannedChange[] {
+export function planVsCode(dirs: ToolDirs, opts: SetupOptions = {}): PlannedChange[] {
+  const notes: string[] = [];
+  const serena = opts.serena ? { type: "stdio", command: opts.serena, args: serenaArgs("vscode") } : null;
   const mcp = planJsonMerge(join(dirs.vscodeUserDir, "mcp.json"), (cur) => {
     const servers = (cur.servers as Record<string, unknown>) ?? {};
-    return { ...cur, servers: { ...servers, codemap: { type: "stdio", ...mcpServer() } } };
-  }, "VS Code MCP server (codemap)");
+    return { ...cur, servers: withSerena({ ...servers, codemap: { type: "stdio", ...mcpServer() } }, serena, notes) };
+  }, `VS Code MCP servers (codemap${serena ? " + serena" : ""})`);
+  if (notes.length) mcp.detail += ` — ${notes.join("; ")}`;
 
   const instructionsFile = join(dirs.vscodeUserDir, "prompts", "codekit.instructions.md");
   const instructions = `---\napplyTo: "**"\ndescription: codekit rules for registered repos\n---\n\n${USER_RULES}\n`;
@@ -131,6 +158,7 @@ export const USER_RULES = `For repositories registered with codekit (the codemap
 - Check codemap_lookup before reading source files; write maps with codemap_write for files you read deeply or edit.
 - Save plans with plan_save; never create AI files (AGENTS.md, rules, plans, notes) inside the source repository.
 - You may edit and commit locally, but NEVER push or write to the remote (no git push, PR create/merge, API writes). The developer pushes.
+- Use Serena's symbol tools (find_symbol, get_symbols_overview, find_referencing_symbols) before reading whole files. If Serena has no active project, call its activate_project tool with the repo's root folder.
 
 ${MCP_INSTRUCTIONS}`;
 

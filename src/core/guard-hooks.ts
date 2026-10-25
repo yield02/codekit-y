@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { matchesGlob } from "./glob.js";
 import { artifactKind, denyAdvice, hookBypass, mcpWriteTargets, shellWriteTargets, type ArtifactRules } from "./artifacts.js";
 import { checkMcpTool, checkShellCommand, commandTargetDirs, type GuardVerdict } from "./guard.js";
 import { createLogger, withCorrelation } from "./logger.js";
@@ -90,7 +91,16 @@ export function evaluateGuard(input: GuardInput): GuardResult {
           return { ...verdict, repo: target.source.root, policy: "push" };
         }
       }
-      return checkArtifactPaths(mcpWriteTargets(input.toolName, input.toolInput), [input.cwd, ...children.map((c) => c.source.root)], input.toolName);
+      const bases = [input.cwd, ...children.map((c) => c.source.root)];
+      // Multi-file edits (Serena replace_in_files: a folder + include/exclude globs) touch every matching file.
+      if (/replace_in_files|search_replace|multi_?edit/i.test(input.toolName)) {
+        const files = globTargets(input.toolInput, bases);
+        if (files.length) {
+          const verdict = checkArtifactPaths(files, bases, input.toolName);
+          if (verdict.blocked) return verdict;
+        }
+      }
+      return checkArtifactPaths(mcpWriteTargets(input.toolName, input.toolInput), bases, input.toolName);
     }
     return { blocked: false };
   });
@@ -121,6 +131,29 @@ function checkArtifactPaths(paths: string[], bases: string[], via: string): Guar
     }
   }
   return { blocked: false };
+}
+
+/** Existing files a folder+glob edit would touch (absolute paths), for registered repos only. */
+function globTargets(input: Record<string, unknown> | undefined, bases: string[]): string[] {
+  const rel = typeof input?.relative_path === "string" ? input.relative_path : ".";
+  const include = typeof input?.paths_include_glob === "string" && input.paths_include_glob ? input.paths_include_glob : "**";
+  const exclude = typeof input?.paths_exclude_glob === "string" ? input.paths_exclude_glob : "";
+  const out: string[] = [];
+  for (const base of bases) {
+    const dir = resolve(base, rel);
+    const owner = ownerOf(join(dir, "x"));
+    if (!owner) continue;
+    const prefix = (owner.source.relativePath(dir) ?? "").replace(/\/$/, "");
+    for (const f of owner.source.listFiles()) {
+      if (prefix && !f.startsWith(`${prefix}/`) && f !== prefix) continue;
+      const local = prefix ? f.slice(prefix.length + 1) : f;
+      // Strict: a glob counts as matching when it matches the path below the folder or the file name.
+      const hit = (g: string) => matchesGlob(local, g) || matchesGlob(local.split("/").pop()!, g);
+      if (!hit(include) || (exclude && hit(exclude))) continue;
+      out.push(owner.source.absolutePath(f));
+    }
+  }
+  return out;
 }
 
 /** Registered repo that contains `abs` (which may not exist yet). Paths inside `.git/` belong to its work tree. */

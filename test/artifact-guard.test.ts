@@ -151,6 +151,16 @@ describe("artifact guard in a registered repo", () => {
     expect(evaluateGuard({ cwd: fx.source, toolName: "mcp__plugin_codekit_codemap__plan_save", toolInput: { name: "x" } }).blocked).toBe(false);
   });
 
+  it("checks every file a Serena replace_in_files would touch", () => {
+    writeSource(fx.source, "CLAUDE.md", "# rules\n");
+    const call = (input: Record<string, unknown>) => evaluateGuard({ cwd: fx.source, toolName: "mcp__serena__replace_in_files", toolInput: { needle: "a", repl: "b", ...input } }).blocked;
+    expect(call({ relative_path: ".", paths_include_glob: "*.md" })).toBe(true);
+    expect(call({ relative_path: "." })).toBe(true); // no glob = every file, including CLAUDE.md
+    expect(call({ relative_path: ".", paths_include_glob: "*.md", paths_exclude_glob: "CLAUDE.md" })).toBe(false);
+    expect(call({ relative_path: "src", paths_include_glob: "**/*.ts" })).toBe(false);
+    expect(evaluateGuard({ cwd: fx.source, toolName: "mcp__serena__safe_delete_symbol", toolInput: { name_path_pattern: "x", relative_path: "src/auth/login.ts" } }).blocked).toBe(false);
+  });
+
   it("respects team exceptions from codekit.yaml", () => {
     const ws = fx.ws();
     const yaml = ws.store.readConfig("codekit.yaml")!;

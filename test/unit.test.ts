@@ -184,6 +184,8 @@ describe("tool-use tracking", () => {
     expect(touchFromToolUse("Edit", { file_path: "/r/a.ts" })?.kind).toBe("edit");
     expect(touchFromToolUse("mcp__serena__replace_symbol_body", { relative_path: "src/a.ts" })).toEqual({ path: "src/a.ts", kind: "edit" });
     expect(touchFromToolUse("mcp__serena__get_symbols_overview", { relative_path: "src/a.ts" })?.kind).toBe("read");
+    expect(touchFromToolUse("mcp__serena__safe_delete_symbol", { relative_path: "src/a.ts" })?.kind).toBe("edit");
+    expect(touchFromToolUse("mcp__serena__replace_content", { relative_path: "src/a.ts" })?.kind).toBe("edit");
     expect(touchFromToolUse("Bash", { command: "ls" })).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ export const MCP_INSTRUCTIONS = `codekit keeps a shared, per-branch codebase map
 For any repo registered with codekit:
 0. NEVER push the source repo or write to its remote (no git push, PR create/merge, API writes). Editing and local commits are fine; the developer pushes.
 1. Call codemap_context first: it returns the project rules, naming and logging conventions, and map coverage.
-2. Before reading source files, call codemap_lookup for them; read source only when the map is missing or stale.
+2. Before reading source files, call codemap_lookup for them; read source only when the map is missing or stale. For structure use Serena's symbol tools (get_symbols_overview, find_symbol, find_referencing_symbols); if Serena reports no active project, call its activate_project tool with the repo root given in codemap_context.
 3. After reading a file in depth or editing it, if its map was missing or stale, call codemap_write with sections:
    ## Purpose, ## Public API, ## Main flow, ## Caveats (keep under ~60 lines).
 4. Plan before coding: brainstorm, then save the plan with plan_save, then implement with tests. Never write plans or any AI files (AGENTS.md, CLAUDE.md, .cursor/, docs/plans/, docs/superpowers/…) into the source repo, even when a skill such as Superpowers says to: use plan_save.
@@ -24,6 +24,7 @@ export function buildContextText(ws: Workspace, report?: SyncReport): string {
     `# codekit — project "${ws.project.name}", repo "${ws.repo.name}", branch "${ws.branch}"`,
     "",
     `- Knowledge store: ${ws.store.kind} backend (outside the source repo — never add AI files to the repo).`,
+    `- Repo root: ${ws.source.root} (Serena: activate_project with this path if it has no active project).`,
     ...repoStatusLines(ws, report),
     `- Enforcement: ${ws.config.enforce}${ws.config.trackReads ? " (read and edited files)" : " (edited files only)"}.`,
   ];
@@ -41,9 +42,10 @@ export function buildParentContextText(parent: ParentContext, reports: Map<strin
     "",
     "Each sub-folder below is its own git repo with its own map and branches. Paths are routed to their repo:",
     "pass paths relative to this folder (`Core/src/x.ts`) or as `<repo>:<path>` to the codemap tools; never push any of these repos.",
+    "Serena works on one repo at a time: before using its symbol tools, call activate_project with the root of the repo you are working on (listed below).",
   ];
   for (const ws of parent.workspaces) {
-    lines.push("", `## ${folderOf(parent, ws)}/ → repo "${ws.repo.name}" of project "${ws.project.name}", branch "${ws.branch}"`, ...repoStatusLines(ws, reports.get(ws.repo.name)));
+    lines.push("", `## ${folderOf(parent, ws)}/ → repo "${ws.repo.name}" of project "${ws.project.name}", branch "${ws.branch}"`, `- Repo root: ${ws.source.root}`, ...repoStatusLines(ws, reports.get(ws.repo.name)));
   }
   const seen = new Set<string>();
   for (const ws of parent.workspaces) {
