@@ -30,7 +30,7 @@ program
   .option("--default-branch <name>", "source default branch", "main")
   .action((name: string, opts: { backend: string; url?: string; path?: string; defaultBranch: string }) => {
     const backend = parseBackend(opts.backend);
-    const actor = `${tryGit(["config", "user.name"], process.cwd()) || process.env.GIT_AUTHOR_NAME || process.env.USERNAME || "codekit"} (cli)`;
+    const actor = `${tryGit(["config", "user.name"], process.cwd()) || process.env.GIT_AUTHOR_NAME || process.env.USERNAME || process.env.USER || "codekit"} (cli)`;
     createProjectStore({ project: name, backend, url: opts.url, path: opts.path, defaultBranch: opts.defaultBranch, actor });
     print(`Knowledge store for "${name}" created (${backend}${opts.url ? `, ${opts.url}` : ""}${opts.path ? `, ${opts.path}` : ""}).\n` +
       `Next, in each developer's clone of the source repo: codekit init --project ${name} --backend ${backend}${opts.url ? ` --url ${opts.url}` : ""}${opts.path ? ` --path "${opts.path}"` : ""}`, false);

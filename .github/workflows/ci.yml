@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Hosted runners: Linux with every supported Node, plus Windows and macOS.
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: 20 }
+          - { os: ubuntu-latest, node: 22 }
+          - { os: ubuntu-latest, node: 24 }
+          - { os: windows-latest, node: 24 }
+          - { os: macos-latest, node: 22 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: git --version
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - name: CLI smoke test
+        if: runner.os != 'Windows'
+        run: bash test/smoke/cli-smoke.sh
+
+  # Stock Ubuntu images with the distribution's own git and python (22.04 ships git 2.34).
+  ubuntu-stock:
+    name: stock ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:22.04", "ubuntu:24.04"]
+    steps:
+      - name: Install distribution packages
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git python3 ca-certificates curl xz-utils >/dev/null
+          git --version
+          python3 --version
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: git config --global --add safe.directory '*'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - name: CLI smoke test
+        run: bash test/smoke/cli-smoke.sh
+      - name: Python logging sample (system python)
+        working-directory: logging/python
+        run: python3 -m unittest -v test_codekit_logging.py
+      - name: Node logging sample (pino)
+        run: |
+          d="$(mktemp -d)"
+          cp -r logging/node/src logging/node/test "$d/"
+          cd "$d"
+          echo '{"name":"t","type":"module","private":true}' > package.json
+          npm i -q --no-audit --no-fund pino@9
+          node --experimental-strip-types --test test/logging.test.ts

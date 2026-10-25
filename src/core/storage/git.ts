@@ -107,10 +107,14 @@ export class GitStorage implements StorageAdapter {
       this.worktree(parent); // make sure the parent ref exists locally and is current
       git(["worktree", "add", "-q", "-b", ref, wt, this.ref(parent)], this.repoDir);
     } else {
-      git(["worktree", "add", "-q", "--orphan", "-b", ref, wt], this.repoDir);
-      writeFile(join(wt, "modules", ".gitkeep"), "");
-      git(["add", "-A"], wt);
-      git(["commit", "-q", "-m", `chore: create map branch ${branch}`], wt);
+      // Root commit built with plumbing: `worktree add --orphan` needs Git 2.42+, and
+      // Ubuntu 22.04 LTS ships 2.34. This works on any Git with worktrees (2.5+).
+      const blob = git(["hash-object", "-w", "--stdin"], this.repoDir, "");
+      const modules = git(["mktree"], this.repoDir, `100644 blob ${blob}\t.gitkeep\n`);
+      const tree = git(["mktree"], this.repoDir, `040000 tree ${modules}\tmodules\n`);
+      const commit = git(["commit-tree", tree, "-m", `chore: create map branch ${branch}`], this.repoDir);
+      git(["branch", ref, commit], this.repoDir);
+      git(["worktree", "add", "-q", wt, ref], this.repoDir);
     }
     git(["config", "core.autocrlf", "false"], wt);
     this.push(wt, ref);
