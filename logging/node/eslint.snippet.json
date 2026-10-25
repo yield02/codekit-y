@@ -1,0 +1,11 @@
+{
+  "rules": {
+    "no-console": "error",
+    "no-restricted-imports": ["error", {
+      "paths": [{ "name": "pino", "message": "Use the project logger wrapper (createLogger) so every entry has correlationId and tags." }]
+    }]
+  },
+  "overrides": [
+    { "files": ["src/logging.ts", "src/**/logging/**"], "rules": { "no-restricted-imports": "off" } }
+  ]
+}

@@ -36,3 +36,15 @@ enforce: fail
 trackReads: true
 # Soft limit for a map body
 mapMaxLines: 60
+
+# Detect squash/rebase PR merges through the GitHub API (read-only GET requests).
+# Token: GITHUB_TOKEN or GH_TOKEN env var (optional for public repos). apiUrl for GitHub Enterprise.
+github:
+  enabled: true
+  # apiUrl: https://github.example.com/api/v3
+  checkIntervalMinutes: 10
+
+# Push guard: AI agents may edit and commit locally in the source repo but NEVER push.
+# The guard cannot be turned off. Only MCP tools listed here are exempt (e.g. issue comments).
+guard:
+  allowMcpTools: []

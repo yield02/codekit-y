@@ -53,3 +53,4 @@ Use only these tags. Add new ones with `logging_add_tag` (kebab-case).
 | `payment` | Payment flows |
 | `validation` | Input validation failures |
 | `config` | Configuration loading |
+| `framework` | Entries emitted by frameworks/libraries (not by project code) |

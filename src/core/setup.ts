@@ -1,7 +1,8 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadUserConfig, saveUserConfig, upsertProject, type BackendKind, type ProjectEntry } from "./config.js";
 import { normalizeRemote } from "./git.js";
+import { AGENT_ENV_MARKERS } from "./guard.js";
 import { writeLineage } from "./lineage.js";
 import { packageRoot, projectStoreDir, toPosix } from "./paths.js";
 import { SourceRepo } from "./source.js";
@@ -54,7 +55,10 @@ export function createProjectStore(opts: CreateStoreOptions): StorageAdapter {
     if (existsSync(join(opts.path, "config", "codekit.yaml"))) throw new Error(`A knowledge store already exists at ${opts.path}`);
     mkdirSync(opts.path, { recursive: true });
     store = new FolderStorage(opts.path, opts.actor);
-    for (const [rel, content] of files) store.writeConfig(rel, content, "initialize knowledge store config");
+    for (const [rel, content] of files) {
+      if (rel.startsWith(".github/")) continue; // CI workflows only make sense in a git store
+      store.writeConfig(rel, content, "initialize knowledge store config");
+    }
   }
   store.createBranch(defaultBranch, null);
   const now = new Date().toISOString();
@@ -79,7 +83,7 @@ export interface InitOptions {
 }
 
 /** Register the current source repo with a project's store (per developer, once per project). */
-export function initRepo(opts: InitOptions): { entry: ProjectEntry; source: SourceRepo } {
+export function initRepo(opts: InitOptions): { entry: ProjectEntry; source: SourceRepo; guard: GuardInstallResult } {
   const source = SourceRepo.open(opts.cwd);
   if (!source) throw new Error(`Not a git repository: ${opts.cwd}`);
   const remote = source.remoteUrl();
@@ -98,7 +102,69 @@ export function initRepo(opts: InitOptions): { entry: ProjectEntry; source: Sour
   else new FolderStorage(entry.store.path!, "codekit").refresh();
 
   addLocalExcludes(source);
-  return { entry, source };
+  const guard = installPrePushGuard(source);
+  return { entry, source, guard };
+}
+
+export const PRE_PUSH_MARKER = "codekit-push-guard";
+
+/** POSIX sh (git runs hooks through sh on Windows too). LF line endings matter. */
+export function prePushScript(): string {
+  return [
+    "#!/bin/sh",
+    `# ${PRE_PUSH_MARKER}: installed by \`codekit init\`.`,
+    "# AI agents may commit locally in this repository but must never push it.",
+    "# Pushes from a normal developer terminal are unaffected.",
+    `for v in ${AGENT_ENV_MARKERS.join(" ")}; do`,
+    '  eval "val=\\${$v}"',
+    '  if [ -n "$val" ]; then',
+    '    echo "codekit: push blocked - this process runs inside an AI agent ($v is set)." >&2',
+    '    echo "codekit: AI agents have read + local-commit access only. Review the commits and push from your own terminal." >&2',
+    "    exit 1",
+    "  fi",
+    "done",
+    'chained="$(dirname "$0")/pre-push.codekit-chained"',
+    'if [ -x "$chained" ]; then exec "$chained" "$@"; fi',
+    "exit 0",
+    "",
+  ].join("\n");
+}
+
+export interface GuardInstallResult {
+  installed: boolean;
+  path?: string;
+  chained?: boolean;
+  reason?: string;
+}
+
+/**
+ * Install the pre-push guard into `.git/hooks` (local, never committed). Repos that
+ * use `core.hooksPath` (husky, lefthook) keep their tracked hooks untouched; the
+ * PreToolUse/Cursor guards still apply there.
+ */
+export function installPrePushGuard(source: SourceRepo): GuardInstallResult {
+  const hooksPath = source.hooksPath();
+  if (hooksPath) return { installed: false, reason: `core.hooksPath is set (${hooksPath}); tracked hooks are left untouched.` };
+  const dir = join(source.gitDir(), "hooks");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "pre-push");
+  let chained = false;
+  if (existsSync(file)) {
+    const current = readFileSync(file, "utf8");
+    if (!current.includes(PRE_PUSH_MARKER)) {
+      renameSync(file, join(dir, "pre-push.codekit-chained"));
+      chained = true;
+    }
+  }
+  writeFileSync(file, prePushScript());
+  chmodSync(file, 0o755);
+  return { installed: true, path: file, chained: chained || existsSync(join(dir, "pre-push.codekit-chained")) };
+}
+
+export function prePushGuardInstalled(source: SourceRepo): boolean {
+  if (source.hooksPath()) return false;
+  const file = join(source.gitDir(), "hooks", "pre-push");
+  return existsSync(file) && readFileSync(file, "utf8").includes(PRE_PUSH_MARKER);
 }
 
 export function addLocalExcludes(source: SourceRepo): void {

@@ -2,6 +2,7 @@ import { isTrackable, lookup } from "./codemap.js";
 import { buildContextText, workflowReminder } from "./context.js";
 import { createLogger, withCorrelation } from "./logger.js";
 import { clearTouches, readTouches, recordTouch, touchFromToolUse } from "./session.js";
+import { detectPrMerges } from "./github.js";
 import { sync } from "./sync.js";
 import { resolveWorkspace, type Workspace } from "./workspace.js";
 
@@ -36,11 +37,24 @@ function run(event: string, payload: HookPayload, fn: (ws: Workspace) => HookOut
   });
 }
 
-export function handleSessionStart(payload: HookPayload): HookOutput {
-  return run("session-start", payload, (ws) => {
-    const report = sync(ws);
-    log.info(["hook", "session-start"], "Session started", { branch: ws.branch, session: payload.session_id });
-    return { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: buildContextText(ws, report) } };
+export async function handleSessionStart(payload: HookPayload): Promise<HookOutput> {
+  return withCorrelation(undefined, async () => {
+    try {
+      const res = resolveWorkspace(payload.cwd || process.cwd(), "claude-code");
+      if (!res.ok) return null;
+      const ws = res.workspace;
+      const report = sync(ws);
+      const prs = await detectPrMerges(ws).catch((err) => {
+        log.warn(["hook", "session-start", "github"], "PR merge detection failed", { error: String(err) });
+        return null;
+      });
+      for (const m of prs?.merged ?? []) report.merged.push({ branch: m.branch, into: m.into, commit: `PR #${m.pr}`, result: m.result });
+      log.info(["hook", "session-start"], "Session started", { branch: ws.branch, session: payload.session_id });
+      return { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: buildContextText(ws, report) } };
+    } catch (err) {
+      log.error(["hook", "session-start"], "Hook failed", err, { cwd: payload.cwd, session: payload.session_id });
+      return null;
+    }
   });
 }
 

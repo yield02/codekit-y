@@ -1,0 +1,22 @@
+<!-- Merge into the web project's .csproj (Microsoft.NET.Sdk.Web, net8.0). -->
+<Project>
+  <ItemGroup>
+    <PackageReference Include="Serilog" Version="4.2.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Feeds the banned-API list to Microsoft.CodeAnalysis.BannedApiAnalyzers (diagnostic RS0030). -->
+    <AdditionalFiles Include="BannedSymbols.txt" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- Make raw logging a build error instead of a warning. -->
+    <WarningsAsErrors>$(WarningsAsErrors);RS0030</WarningsAsErrors>
+  </PropertyGroup>
+</Project>

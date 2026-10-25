@@ -7,6 +7,12 @@ They live in the internal knowledge store, **not** in the source repository.
 Do not create or commit `AGENTS.md`, `CLAUDE.md`, `.cursor/`, `.github/copilot-instructions.md`,
 plans, maps, or notes inside the source repository. Use the codekit MCP tools instead.
 
+## 0.1 Never push the source repo (strict)
+You may read, edit and commit **locally** in the source repository. You must **never** publish anything:
+no `git push` (in any form), no `gh pr create/merge`, no GitHub API or MCP write calls, no pushing via aliases or nested shells.
+When the work is done, tell the developer which commits are ready; they review and push themselves.
+codekit enforces this with a PreToolUse guard and a `pre-push` hook — do not try to work around them.
+
 ## 1. Look before you read
 1. `codemap_context` once per session (rules, conventions, coverage).
 2. `codemap_lookup` for the files you are about to open. If the map is `ok`, trust it and read source only for the exact lines you need.

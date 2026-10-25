@@ -175,10 +175,22 @@ Body: `## Purpose` · `## Public API` · `## Main flow` · `## Caveats` (limit ~
 | Node/TS | pino (+ pino-pretty in dev) | AsyncLocalStorage + Express/Nest middleware |
 | Java/Spring | SLF4J + Logback + logstash-logback-encoder | MDC + `OncePerRequestFilter`, RestTemplate/WebClient interceptor |
 | .NET | Serilog | `LogContext` + ASP.NET Core middleware, `DelegatingHandler` |
-| Python | structlog | contextvars + FastAPI/Django middleware |
+| Python | standard library `logging` (no new dependency) | contextvars + ASGI (FastAPI/Starlette) and Django middleware |
 - `logging` skill/rule: new code must use the wrapper, tags from the registry, and log at boundaries (request in/out, external calls, errors).
 - Lint rules banning raw loggers (ESLint `no-console`, ArchUnit, BannedApiAnalyzers, ruff `TID251`): optional, when the project agrees.
 - `codemap`/`codemap-mcp` themselves log to this standard in `~/.codekit/logs/` (`tags: [codemap, mcp|hook|sync]`).
+
+### 4.7 Push guard — source repos are read + local-commit only (strict)
+AI agents may read, edit and commit **locally** in a registered source repo, but must **never** push or write to its remote. The developer reviews and pushes. Three independent layers enforce this:
+
+| Layer | Covers | Mechanism |
+|---|---|---|
+| 1. Agent hooks | Claude Code (`PreToolUse` on `Bash`/`PowerShell`/`mcp__*`), Cursor (`beforeShellExecution`, `beforeMCPExecution` via `codekit setup-tools`) | Command analysis that denies `git push`/`send-pack`/`subtree push`/`lfs push`, push aliases (also existing repo aliases), `-C`/`cd` into the repo from elsewhere, nested shells (`bash -c`, `pwsh -Command`, `cmd /c`, `eval`, `$(…)`), encoded commands, `gh pr create/merge/…`, `gh api` writes, `curl`/`Invoke-RestMethod` writes to code-host APIs, and code-host MCP write tools. Fails closed on errors. |
+| 2. `pre-push` git hook | every tool that sets an agent marker (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `AI_AGENT`, `CURSOR_AGENT`, `CODEKIT_AGENT`) | Installed locally into `.git/hooks` by `codekit init` (never committed). It chains an existing hook and does not affect pushes from the developer's own terminal. Skipped when the repo uses `core.hooksPath` (husky); `doctor` reports it. |
+| 3. Kit code | `codemap`, `codemap-mcp`, hooks | `SourceRepo` runs only an allow-list of read-only git commands (`rev-parse`, `show`, `cat-file`, `ls-tree`, `log`, `config --get`, …) and throws on anything else. The GitHub integration sends GET requests only. |
+
+- The guard cannot be disabled in `codekit.yaml`. Only individual MCP tools can be allow-listed (`guard.allowMcpTools`, e.g. issue comments).
+- Copilot (VS Code) has no hook API, so `setup-tools` prints a `chat.tools.terminal.autoApprove` snippet that makes `git push` / `gh pr` always require manual approval. The rules forbid pushing, and layer 2 applies when an agent marker is present.
 
 ## 5. Kit repository — `codekit-y`
 ```
@@ -200,6 +212,8 @@ codekit-y/
 - `codekit doctor`: verify the setup (kit built, Serena's `uv`, store reachable, branch map).
 
 ## 6. Reporting & enforcement (no CI in the source repo)
+*Implemented in milestone 2:* `codemap report` (per-branch coverage from committed source, one `git cat-file --batch` per branch) with the `codemap-report.yml` workflow template for the store repo (read-only source token, `persist-credentials: false`), and `codemap view` (static HTML: search, map detail, dependency graph).
+
 - **Claude Code**: hard block via the `Stop` hook.
 - **Cursor**: user-level hooks if the spike confirms them; otherwise soft (rules + MCP).
 - **Copilot**: soft (rules + MCP).

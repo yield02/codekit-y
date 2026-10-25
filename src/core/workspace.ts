@@ -22,6 +22,15 @@ export function createStorage(project: ProjectEntry, actor: string): StorageAdap
   return new FolderStorage(project.store.path, actor);
 }
 
+/** Light check (no store access): is `dir` inside a source repo registered with codekit? */
+export function findRegisteredSource(dir: string): { source: SourceRepo; project: ProjectEntry } | null {
+  const source = SourceRepo.open(dir);
+  const remote = source?.remoteUrl();
+  if (!source || !remote) return null;
+  const project = findProjectByRemote(loadUserConfig(), remote);
+  return project ? { source, project } : null;
+}
+
 export type WorkspaceResolution =
   | { ok: true; workspace: Workspace }
   | { ok: false; reason: "not-a-git-repo" | "no-remote" | "not-registered"; detail: string };
