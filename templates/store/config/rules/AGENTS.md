@@ -46,3 +46,5 @@ Gotchas, invariants, surprising behavior, TODOs.
 ## 4. Conventions
 - Follow `conventions/naming.md` (see `naming_list`). To add or change a rule, use `naming_add_rule` / `naming_edit_rule` — only when the user asks.
 - Follow `conventions/logging.md`: every log has a `correlationId` and `tags` from the registry. New tags go through `logging_add_tag`.
+- Logging always goes through the project's existing logger (see the **Project logger** entry, or run `logging_detect`). Never add a second logging library or a parallel logger. Extend the existing one.
+- Log so failures are easy to debug, without noise: one line per request or job, one `error` line per failure carrying the ids needed to reproduce it, nothing inside loops, no payloads and no secrets.

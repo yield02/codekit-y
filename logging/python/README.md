@@ -34,6 +34,17 @@ async def create_order(order: Order):
 - Jobs and queue consumers wrap each unit of work in `with correlation_scope(message.headers.get("X-Correlation-Id")):`.
 - When OpenTelemetry is installed and a span is active, its trace id becomes the correlationId.
 
+## Built in: debuggable, not noisy
+- `logger` field. Use `get_logger(__name__)` per module so every line says where it came from.
+- One `info` line per request (`Request finished`, with `durationMs`). It becomes `warn` `Slow request` above `LOG_SLOW_REQUEST_MS` (default 1000). `Request started` is `debug`. Disable the framework's access log.
+- `context` is sanitized:
+  - keys like `password`, `token`, `authorization`, `cookie`, `apiKey` and `card` become `[redacted]`
+  - strings over 500 characters, arrays over 20 items, nesting deeper than 3 levels and more than 20 keys are truncated
+- Errors keep the `__cause__`/`__context__` chain in `error.stack`.
+- The same error from the same logger is written once per 60 s. The next write carries `context.repeated`.
+- `debug` is off unless `LOG_LEVEL=debug`.
+- `codekit logs --stats` on a log file shows the noisiest messages.
+
 ## Tests
 ```bash
 python -m unittest test_codekit_logging.py

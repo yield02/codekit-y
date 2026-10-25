@@ -109,3 +109,7 @@ Non-HTTP entry points such as message listeners and schedulers must do what the 
 - **Micrometer Tracing (no OTel Java agent).** The tracing filter runs after this filter, so no span exists yet when the id is resolved. To use the trace id, change the filter order to `Ordered.HIGHEST_PRECEDENCE + 2`. With the OTel Java agent, the span already exists and nothing needs to change.
 - **Async work.** MDC is thread-local. `@Async` methods, executors, and async servlet requests don't inherit it unless you add a `TaskDecorator` that copies the MDC context. The same applies to reactive WebClient pipelines, which need Reactor context propagation.
 - **Incoming ids are restricted.** An incoming `X-Correlation-Id` is accepted only if it has 1 to 128 characters from `[A-Za-z0-9._:-]`. Otherwise a new id is used, which prevents log injection.
+
+## Debuggable, not noisy
+- The HTTP filter/middleware writes one `info` line per request, or `warn` `Slow request` above the threshold (1000 ms by default). `Request started` is `debug` only. Turn off the framework's own request log so requests are not logged twice.
+- This sample does **not** yet redact secrets, bound `context` size or collapse repeated errors. Add these rules to the wrapper when adopting it. They are described in `logging/adapters/in-house.md` §4 and the Node/Python samples implement them.

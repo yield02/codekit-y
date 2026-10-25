@@ -23,6 +23,7 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
 
     private static final TaggedLogger log = TaggedLogger.of(CorrelationIdFilter.class);
     private static final List<String> TAGS = List.of("http");
+    private static final long SLOW_REQUEST_MS = Long.getLong("logging.slowRequestMs", 1000L);
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
@@ -35,16 +36,19 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
         String path = request.getRequestURI(); // no query string: it may carry PII
         long start = System.nanoTime();
         boolean failed = false;
-        log.info(TAGS, "Request in", TaggedLogger.ctx("method", method, "path", path));
+        // One info line per request; "started" only at debug. Turn off Tomcat/Spring access logs to avoid duplicates.
+        log.debug(TAGS, "Request started", TaggedLogger.ctx("method", method, "path", path));
         try {
             chain.doFilter(request, response);
         } catch (IOException | ServletException | RuntimeException e) {
-            failed = true;
+            failed = true; // the exception handler logs the error once; this line only records the outcome
             throw e;
         } finally {
             int status = failed ? HttpServletResponse.SC_INTERNAL_SERVER_ERROR : response.getStatus();
             long durationMs = (System.nanoTime() - start) / 1_000_000;
-            log.info(TAGS, "Request out", TaggedLogger.ctx("method", method, "path", path, "status", status), durationMs);
+            var ctx = TaggedLogger.ctx("method", method, "path", path, "status", status);
+            if (durationMs > SLOW_REQUEST_MS) log.warn(TAGS, "Slow request", ctx, durationMs);
+            else log.info(TAGS, "Request finished", ctx, durationMs);
             MDC.remove(CorrelationId.MDC_KEY);
         }
     }

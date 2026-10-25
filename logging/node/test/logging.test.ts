@@ -27,6 +27,47 @@ test("JSON entries carry the required fields", async () => {
   assert.equal(entry.level, "info");
 });
 
+test("logger field names the module; child() switches it", async () => {
+  const { lines, stream } = capture();
+  const log = createLogger({ service: "orders", logger: "OrderService", destination: stream, pretty: false });
+  log.info(["order"], "Order placed", { orderId: "o-1" });
+  log.child("PaymentClient").info(["payment"], "Charge accepted");
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(lines.map((l) => JSON.parse(l).logger), ["OrderService", "PaymentClient"]);
+});
+
+test("context is redacted and size-bounded; errors keep their cause chain", async () => {
+  const { lines, stream } = capture();
+  const log = createLogger({ service: "s", destination: stream, pretty: false });
+  const cause = new Error("connection refused");
+  log.error(["db"], "Query failed", new Error("could not load order", { cause }), {
+    password: "hunter2", authToken: "abc", note: "x".repeat(2000), ids: Array.from({ length: 50 }, (_, i) => i), deep: { a: { b: { c: { d: 1 } } } },
+  });
+  await new Promise((r) => setImmediate(r));
+  const e = JSON.parse(lines[0]!);
+  assert.equal(e.context.password, "[redacted]");
+  assert.equal(e.context.authToken, "[redacted]");
+  assert.ok(e.context.note.length < 600 && e.context.note.includes("…(+1500)"));
+  assert.equal(e.context.ids.length, 21);
+  assert.equal(e.context.deep.a.b, "[object]");
+  assert.match(e.error.stack, /Caused by: Error: connection refused/);
+});
+
+test("the same error is written once per minute, then with a repeat count", async () => {
+  const { lines, stream } = capture();
+  const log = createLogger({ service: "s", destination: stream, pretty: false });
+  for (let i = 0; i < 50; i++) log.error(["external-api"], "Rates API down", new Error("503"));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(lines.length, 1);
+});
+
+test("debug is off by default", async () => {
+  const { lines, stream } = capture();
+  createLogger({ service: "s", destination: stream, pretty: false }).debug(["job"], "noise");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(lines.length, 0);
+});
+
 test("tags are mandatory", () => {
   const log = createLogger({ service: "s", destination: capture().stream, pretty: false });
   assert.throws(() => log.info([], "no tags"), /tag/);

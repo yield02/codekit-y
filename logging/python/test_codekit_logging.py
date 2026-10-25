@@ -47,6 +47,38 @@ class LoggingTest(unittest.TestCase):
         self.assertEqual(e["error"]["type"], "RuntimeError")
         self.assertIn("card declined", e["error"]["stack"])
 
+    def test_logger_field(self):
+        self.log.info(["order"], "Order placed")
+        self.assertEqual(self.entries()[0]["logger"], "orders.service")
+
+    def test_context_redacted_and_bounded_and_cause_chain(self):
+        try:
+            try:
+                raise ConnectionError("connection refused")
+            except ConnectionError as cause:
+                raise RuntimeError("could not load order") from cause
+        except RuntimeError as exc:
+            self.log.error(["db"], "Query failed (chain test)", exc, {
+                "password": "hunter2", "auth_token": "abc", "note": "x" * 2000,
+                "ids": list(range(50)), "deep": {"a": {"b": {"c": {"d": 1}}}},
+            })
+        e = self.entries()[0]
+        self.assertEqual(e["context"]["password"], "[redacted]")
+        self.assertEqual(e["context"]["auth_token"], "[redacted]")
+        self.assertTrue(e["context"]["note"].endswith("…(+1500)"))
+        self.assertEqual(len(e["context"]["ids"]), 21)
+        self.assertEqual(e["context"]["deep"]["a"]["b"], "[object]")
+        self.assertIn("ConnectionError: connection refused", e["error"]["stack"])
+
+    def test_repeated_errors_collapse(self):
+        for _ in range(50):
+            self.log.error(["external-api"], "Rates API down (repeat test)", RuntimeError("503"))
+        self.assertEqual(len(self.entries()), 1)
+
+    def test_debug_off_by_default(self):
+        self.log.debug(["job"], "noise")
+        self.assertEqual(self.entries(), [])
+
     def test_pretty_format(self):
         line = cl.format_pretty({"timestamp": "2026-10-25T09:12:03.120Z", "level": "info", "correlationId": "0190aaaa-7f3a91c2", "tags": ["auth", "login"], "message": "Login success", "context": {"user_id": 42}, "durationMs": 12})
         self.assertEqual(line, "09:12:03.120 INFO  [cid=7f3a91c2] [auth,login] Login success user_id=42 (12ms)")

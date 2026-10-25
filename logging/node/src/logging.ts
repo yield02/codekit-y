@@ -59,6 +59,35 @@ export interface TaggedLogger {
   info(tags: string[], message: string, context?: Context): void;
   warn(tags: string[], message: string, context?: Context): void;
   error(tags: string[], message: string, error?: unknown, context?: Context): void;
+  /** Same logger for another module/class: fills the `logger` field. */
+  child(logger: string): TaggedLogger;
+}
+
+// ---------------------------------------------------------------- noise and safety limits
+
+const SECRET_KEY = /pass(word|wd)?|secret|token|authorization|cookie|api[-_]?key|card/i;
+const MAX_STRING = 500;
+const MAX_ARRAY = 20;
+const MAX_DEPTH = 3;
+const MAX_KEYS = 20;
+export const REPEAT_WINDOW_MS = 60_000;
+
+/** Redact secrets and bound sizes so a log line never carries payloads or credentials. */
+export function sanitize(value: unknown, depth = 0, key = ""): unknown {
+  if (key && SECRET_KEY.test(key)) return "[redacted]";
+  if (typeof value === "string") return value.length > MAX_STRING ? `${value.slice(0, MAX_STRING)}…(+${value.length - MAX_STRING})` : value;
+  if (value === null || typeof value !== "object") return value;
+  if (value instanceof Date) return value.toISOString();
+  if (depth >= MAX_DEPTH) return Array.isArray(value) ? `[array(${value.length})]` : "[object]";
+  if (Array.isArray(value)) {
+    const items = value.slice(0, MAX_ARRAY).map((v) => sanitize(v, depth + 1));
+    return value.length > MAX_ARRAY ? [...items, `…(+${value.length - MAX_ARRAY})`] : items;
+  }
+  const entries = Object.entries(value as Context);
+  const out: Context = {};
+  for (const [k, v] of entries.slice(0, MAX_KEYS)) out[k] = sanitize(v, depth + 1, k);
+  if (entries.length > MAX_KEYS) out["…"] = `+${entries.length - MAX_KEYS} keys`;
+  return out;
 }
 
 const LEVEL_LABEL: Record<number, string> = { 10: "TRACE", 20: "DEBUG", 30: "INFO", 40: "WARN", 50: "ERROR", 60: "FATAL" };
@@ -94,6 +123,8 @@ function prettyStream(out: NodeJS.WritableStream = process.stdout): Writable {
 
 export interface LoggerOptions {
   service: string;
+  /** Module/class name for the `logger` field (use child() for others). */
+  logger?: string;
   level?: string;
   pretty?: boolean;
   /** Custom destination (tests). */
@@ -115,27 +146,54 @@ export function createLogger(opts: LoggerOptions): TaggedLogger {
     destination as pino.DestinationStream,
   );
 
-  const write = (level: "debug" | "info" | "warn" | "error", tags: string[], message: string, context?: Context, error?: unknown) => {
-    if (!Array.isArray(tags) || tags.length === 0) throw new Error("log entries need at least one tag");
-    const { durationMs, ...rest } = context ?? {};
-    base[level]({
-      tags,
-      ...(Object.keys(rest).length ? { context: rest } : {}),
-      ...(typeof durationMs === "number" ? { durationMs } : {}),
-      ...(error !== undefined ? { error: toError(error) } : {}),
-    }, message);
-  };
+  // The same error from the same logger is written once per window; the next write carries the count.
+  const repeats = new Map<string, { since: number; suppressed: number }>();
 
-  return {
-    debug: (tags, message, context) => write("debug", tags, message, context),
-    info: (tags, message, context) => write("info", tags, message, context),
-    warn: (tags, message, context) => write("warn", tags, message, context),
-    error: (tags, message, error, context) => write("error", tags, message, context, error),
+  const make = (loggerName: string): TaggedLogger => {
+    const write = (level: "debug" | "info" | "warn" | "error", tags: string[], message: string, context?: Context, error?: unknown) => {
+      if (!Array.isArray(tags) || tags.length === 0) throw new Error("log entries need at least one tag");
+      if (!base.isLevelEnabled(level)) return;
+      const { durationMs, ...rest } = context ?? {};
+      if (level === "error") {
+        const key = `${loggerName}|${message}`;
+        const now = Date.now();
+        const seen = repeats.get(key);
+        if (seen && now - seen.since < REPEAT_WINDOW_MS) {
+          seen.suppressed++;
+          return;
+        }
+        if (seen?.suppressed) rest.repeated = seen.suppressed;
+        repeats.set(key, { since: now, suppressed: 0 });
+      }
+      base[level]({
+        logger: loggerName,
+        tags,
+        ...(Object.keys(rest).length ? { context: sanitize(rest) } : {}),
+        ...(typeof durationMs === "number" ? { durationMs } : {}),
+        ...(error !== undefined ? { error: toError(error) } : {}),
+      }, message);
+    };
+    return {
+      debug: (tags, message, context) => write("debug", tags, message, context),
+      info: (tags, message, context) => write("info", tags, message, context),
+      warn: (tags, message, context) => write("warn", tags, message, context),
+      error: (tags, message, error, context) => write("error", tags, message, context, error),
+      child: (name) => make(name),
+    };
   };
+  return make(opts.logger ?? opts.service);
 }
 
-function toError(err: unknown): { type: string; message: string; stack?: string } {
-  return err instanceof Error ? { type: err.name, message: err.message, stack: err.stack } : { type: typeof err, message: String(err) };
+/** type, message and the stack including the `cause` chain. */
+export function toError(err: unknown): { type: string; message: string; stack?: string } {
+  if (!(err instanceof Error)) return { type: typeof err, message: String(err) };
+  let stack = err.stack ?? "";
+  let cause = (err as { cause?: unknown }).cause;
+  for (let depth = 0; cause instanceof Error && depth < 5; depth++) {
+    stack += `\nCaused by: ${cause.stack ?? `${cause.name}: ${cause.message}`}`;
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return { type: err.name, message: err.message, stack };
 }
 
 // ---------------------------------------------------------------- HTTP in / out
@@ -143,17 +201,26 @@ function toError(err: unknown): { type: string; message: string; stack?: string 
 interface Req { method?: string; url?: string; originalUrl?: string; headers: Record<string, string | string[] | undefined> }
 interface Res { statusCode: number; setHeader(name: string, value: string): unknown; on(event: "finish", cb: () => void): unknown }
 
-/** Express/Connect-style middleware (also works with plain node:http handlers). */
-export function correlationMiddleware(log: TaggedLogger) {
+/**
+ * Express/Connect-style middleware (also works with plain node:http handlers).
+ * One `info` line per request; `warn` when slower than `slowMs`. "Request started" is debug only.
+ * Disable the framework's own access log so requests are not logged twice.
+ */
+export function correlationMiddleware(log: TaggedLogger, opts: { slowMs?: number } = {}) {
+  const slowMs = opts.slowMs ?? 1000;
+  const http = log.child("http");
   return (req: Req, res: Res, next: () => void): void => {
     const header = req.headers[CORRELATION_HEADER];
     withCorrelationId(Array.isArray(header) ? header[0] : header, () => {
       const started = performance.now();
       res.setHeader("X-Correlation-Id", currentCorrelationId()!);
-      const path = req.originalUrl ?? req.url ?? "";
-      log.info(["http"], "Request started", { method: req.method, path });
+      const path = (req.originalUrl ?? req.url ?? "").split("?")[0]; // no query strings: they often carry tokens
+      http.debug(["http"], "Request started", { method: req.method, path });
       res.on("finish", () => {
-        log.info(["http"], "Request finished", { method: req.method, path, status: res.statusCode, durationMs: Math.round(performance.now() - started) });
+        const durationMs = Math.round(performance.now() - started);
+        const ctx = { method: req.method, path, status: res.statusCode, durationMs };
+        if (durationMs > slowMs) http.warn(["http"], "Slow request", { ...ctx, slowMs });
+        else http.info(["http"], "Request finished", ctx);
       });
       next();
     });

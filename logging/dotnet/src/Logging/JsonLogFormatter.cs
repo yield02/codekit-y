@@ -9,7 +9,7 @@ namespace Codekit.Logging;
 
 /// <summary>
 /// Production format: one JSON object per line with the convention's field names
-/// (timestamp, level, service, correlationId, tags, message, context, durationMs, error).
+/// (timestamp, level, service, logger, correlationId, tags, message, context, durationMs, error).
 /// </summary>
 public sealed class JsonLogFormatter : ITextFormatter
 {
@@ -23,6 +23,8 @@ public sealed class JsonLogFormatter : ITextFormatter
         output.Write(LogFields.Level(logEvent.Level));
         output.Write("\",\"service\":");
         JsonValueFormatter.WriteQuotedJsonString(LogFields.GetString(logEvent, LogFields.Service) ?? "unknown", output);
+        output.Write(",\"logger\":");
+        JsonValueFormatter.WriteQuotedJsonString(LogFields.GetString(logEvent, Serilog.Core.Constants.SourceContextPropertyName) ?? "unknown", output);
         output.Write(",\"correlationId\":");
         JsonValueFormatter.WriteQuotedJsonString(LogFields.GetString(logEvent, LogFields.CorrelationId) ?? CorrelationId.None, output);
 
