@@ -15,7 +15,7 @@ For any repo registered with codekit:
 2. Before reading source files, call codemap_lookup for them; read source only when the map is missing or stale.
 3. After reading a file in depth or editing it, if its map was missing or stale, call codemap_write with sections:
    ## Purpose, ## Public API, ## Main flow, ## Caveats (keep under ~60 lines).
-4. Plan before coding: brainstorm, then save the plan with plan_save (never write plans or any AI files into the source repo), then implement with tests.
+4. Plan before coding: brainstorm, then save the plan with plan_save, then implement with tests. Never write plans or any AI files (AGENTS.md, CLAUDE.md, .cursor/, docs/plans/, docs/superpowers/…) into the source repo, even when a skill such as Superpowers says to: use plan_save.
 5. Follow the naming convention (naming_list) and logging convention (logging_convention); change them only via naming_add_rule / naming_edit_rule / logging_add_tag.
 6. Multi-repo projects (microservices) share one store: look up another service's file with codemap_lookup("<repo>:<path>"), search all services with codemap_search(scope: "project"), reference other services in dependsOn as "<repo>:<path>", and keep this service's summary current with service_write.`;
 
@@ -102,7 +102,7 @@ export function workflowReminder(ws: Workspace, parent?: ParentContext): string 
     ? `Parent folder with repos ${parent.workspaces.map((w) => `${folderOf(parent, w)}/ (${w.repo.name}@${w.branch})`).join(", ")}`
     : `Project "${ws.project.name}" on branch "${ws.branch}"`;
   return `[codekit] ${where}: check the map (codemap_lookup) before reading source; ` +
-    `plan with Superpowers (brainstorming -> writing-plans, save via plan_save) before non-trivial changes; ` +
+    `plan with Superpowers (brainstorming -> writing-plans) and save the plan with plan_save, never under docs/plans/ or docs/superpowers/; ` +
     `write maps for files you read deeply or edit; follow the naming and logging conventions; ` +
     `you may commit locally but NEVER push or write to the remote — the developer pushes.`;
 }

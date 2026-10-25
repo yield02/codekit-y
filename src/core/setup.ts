@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { addRepoToStoreConfig, loadUserConfig, parseStoreConfig, repoNameFromRemote, repoNameInStore, saveUserConfig, upsertRepo, type BackendKind, type ProjectEntry, type RepoEntry } from "./config.js";
 import { normalizeRemote } from "./git.js";
 import { repoFoldersUnder } from "./parent.js";
+import { artifactPatterns, type ArtifactRules } from "./artifacts.js";
 import { AGENT_ENV_MARKERS } from "./guard.js";
 import { packageRoot, projectStoreDir, toPosix } from "./paths.js";
 import { SourceRepo } from "./source.js";
@@ -83,7 +84,7 @@ export interface InitOptions {
  * Every repo of a project (core, product, …) is registered with the same --project and
  * the same store: their maps are kept side by side in that one store.
  */
-export function initRepo(opts: InitOptions): { entry: ProjectEntry; repo: RepoEntry; source: SourceRepo; guard: GuardInstallResult } {
+export function initRepo(opts: InitOptions): { entry: ProjectEntry; repo: RepoEntry; source: SourceRepo; guard: GuardInstallResult; artifactGuard: GuardInstallResult } {
   const source = SourceRepo.open(opts.cwd);
   if (!source) throw new Error(`Not a git repository: ${opts.cwd}`);
   const remote = source.remoteUrl();
@@ -117,7 +118,9 @@ export function initRepo(opts: InitOptions): { entry: ProjectEntry; repo: RepoEn
 
   addLocalExcludes(source);
   const guard = installPrePushGuard(source);
-  return { entry, repo, source, guard };
+  const g = parseStoreConfig(storeYaml, opts.project).guard;
+  const artifactGuard = installPreCommitGuard(source, { extra: g.artifactPaths, allow: g.allowPaths });
+  return { entry, repo, source, guard, artifactGuard };
 }
 
 /** `Transactions` -> `transactions`, `Admin Portal` -> `admin-portal` */
@@ -185,6 +188,85 @@ export function installPrePushGuard(source: SourceRepo): GuardInstallResult {
   writeFileSync(file, prePushScript());
   chmodSync(file, 0o755);
   return { installed: true, path: file, chained: chained || existsSync(join(dir, "pre-push.codekit-chained")) };
+}
+
+export const PRE_COMMIT_MARKER = "codekit-artifact-guard";
+
+/** Glob (same semantics as matchesGlob) -> POSIX ERE for `grep -Ei` in the pre-commit hook. */
+export function globToEre(glob: string): string {
+  const g = glob.replace(/\\/g, "/").replace(/^\.?\//, "");
+  const conv = (pattern: string) => {
+    let re = "";
+    for (let i = 0; i < pattern.length; i++) {
+      const c = pattern[i]!;
+      if (c === "*" && pattern[i + 1] === "*") {
+        const slashAfter = pattern[i + 2] === "/";
+        re += slashAfter ? "(.*/)?" : ".*";
+        i += slashAfter ? 2 : 1;
+      } else if (c === "*") re += "[^/]*";
+      else if (c === "?") re += "[^/]";
+      else re += /[.+()|{}[\]^$\\]/.test(c) ? `\\${c}` : c;
+    }
+    return re;
+  };
+  if (!g.includes("/")) return `(^|/)${conv(g)}$`;
+  return `^${conv(g)}$`;
+}
+
+/**
+ * Rejects commits made by AI agents that add or change AI files (AGENTS.md, CLAUDE.md, .cursor/,
+ * docs/plans/…). Deleting such files is allowed. The developer's own commits are unaffected.
+ */
+export function preCommitScript(rules: ArtifactRules): string {
+  for (const g of [...rules.extra, ...rules.allow]) if (/['\n]/.test(g)) throw new Error(`Invalid guard pattern: ${g}`);
+  const block = artifactPatterns(rules).map((p) => globToEre(p.glob)).join("|");
+  const allow = rules.allow.map(globToEre).join("|");
+  return [
+    "#!/bin/sh",
+    `# ${PRE_COMMIT_MARKER}: installed by \`codekit init\` (re-run it after changing guard paths in codekit.yaml).`,
+    "# AI agents may commit locally but must not add AI files (rules, plans, tool config, memories) to this repo.",
+    'marker=""',
+    `for v in ${AGENT_ENV_MARKERS.join(" ")}; do`,
+    '  eval "val=\\${$v}"',
+    '  if [ -n "$val" ]; then marker="$v"; break; fi',
+    "done",
+    'if [ -n "$marker" ]; then',
+    `  bad=$(git diff --cached --name-only --diff-filter=ACMR | grep -Ei '${block}'${allow ? ` | grep -Eiv '${allow}'` : ""})`,
+    '  if [ -n "$bad" ]; then',
+    '    echo "codekit: commit blocked - an AI agent ($marker is set) is committing AI files:" >&2',
+    `    echo "$bad" | sed 's/^/  /' >&2`,
+    '    echo "codekit: plans go to plan_save, maps to codemap_write, rules stay in the knowledge store. Unstage them: git restore --staged <file>" >&2',
+    "    exit 1",
+    "  fi",
+    "fi",
+    'chained="$(dirname "$0")/pre-commit.codekit-chained"',
+    'if [ -x "$chained" ]; then exec "$chained" "$@"; fi',
+    "exit 0",
+    "",
+  ].join("\n");
+}
+
+/** Install (or refresh) the pre-commit artifact guard, chaining an existing hook. */
+export function installPreCommitGuard(source: SourceRepo, rules: ArtifactRules): GuardInstallResult {
+  const hooksPath = source.hooksPath();
+  if (hooksPath) return { installed: false, reason: `core.hooksPath is set (${hooksPath}); tracked hooks are left untouched.` };
+  const dir = join(source.gitDir(), "hooks");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "pre-commit");
+  let chained = false;
+  if (existsSync(file) && !readFileSync(file, "utf8").includes(PRE_COMMIT_MARKER)) {
+    renameSync(file, join(dir, "pre-commit.codekit-chained"));
+    chained = true;
+  }
+  writeFileSync(file, preCommitScript(rules));
+  chmodSync(file, 0o755);
+  return { installed: true, path: file, chained: chained || existsSync(join(dir, "pre-commit.codekit-chained")) };
+}
+
+export function preCommitGuardInstalled(source: SourceRepo): boolean {
+  if (source.hooksPath()) return false;
+  const file = join(source.gitDir(), "hooks", "pre-commit");
+  return existsSync(file) && readFileSync(file, "utf8").includes(PRE_COMMIT_MARKER);
 }
 
 export function prePushGuardInstalled(source: SourceRepo): boolean {

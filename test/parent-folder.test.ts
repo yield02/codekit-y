@@ -116,6 +116,16 @@ describe("parent folder Transfer/{Transactions,Core,Abs,Admin}", () => {
     expect(handlePreToolUse({ cwd: tempDir("unrelated-"), tool_name: "Bash", tool_input: { command: "git push" } })).toBeNull();
   });
 
+  it("denies AI files in any sub-repo from the parent folder, but not in the parent itself", () => {
+    const tool = (tool_name: string, tool_input: Record<string, unknown>) => !!handlePreToolUse({ cwd: fx.parent, tool_name, tool_input });
+    expect(tool("Write", { file_path: join(fx.parent, "Core", "CLAUDE.md") })).toBe(true);
+    expect(tool("Write", { file_path: "Admin/docs/plans/x.md" })).toBe(true);
+    expect(tool("Bash", { command: "echo x > Transactions/.cursorrules" })).toBe(true);
+    expect(tool("Bash", { command: "cd Abs && git commit --no-verify -m x" })).toBe(true);
+    expect(tool("Write", { file_path: join(fx.parent, "Core", "src", "index.ts") })).toBe(false);
+    expect(tool("Write", { file_path: join(fx.parent, "docs", "notes.md") })).toBe(false); // the parent is not a repo
+  });
+
   it("MCP tools route by path or repo from the parent folder", async () => {
     const { client, call } = await mcpClient(fx.parent);
     expect((await call("codemap_context")).text).toContain("with 4 registered repos");

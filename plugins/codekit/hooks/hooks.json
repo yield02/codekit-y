@@ -16,7 +16,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^(Bash|PowerShell)$|^mcp__",
+        "matcher": "^(Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit)$|^mcp__",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/../../dist/cli/codemap.js\" hook pre-tool-use", "timeout": 15 }
         ]

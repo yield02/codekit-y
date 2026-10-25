@@ -27,6 +27,12 @@ A kit for AI-assisted source code management. It helps AI tools (Claude Code, Cu
   - Agents read other services' maps with `codemap_lookup("core:src/…")` and search every service at once.
   - Each service has a summary (`service_write`) that appears in every agent's context.
   - `codemap view --project` draws the whole system.
+- **Artifact guard.** No AI files go into source repos. Agents cannot create or change `AGENTS.md`, `CLAUDE.md`, `.cursor/`, `.claude/`, `.github/copilot-instructions.md`, `docs/plans/`, `docs/superpowers/`, Serena memories and similar files.
+  - This applies to file tools, shell commands and MCP tools alike.
+  - A local `pre-commit` hook rejects agent commits that include such files.
+  - Hook bypasses (`--no-verify`, `core.hooksPath`) are denied.
+  - `codemap report` flags AI files that slipped through anyway.
+  - Plans go to `plan_save`, even when Superpowers asks for `docs/plans/`.
 - **Parent folder or multi-root workspace.** You can open the AI tool on `Transfer/` (holding `Transactions/`, `Core/`, `Abs/`, `Admin/`) or on a VS Code multi-root workspace of those repos.
   - Every path is routed to its own repo: `Core/src/x.ts` and `core:src/x.ts` both work.
   - Session context covers every repo, and the Stop hook lists missing maps per repo.

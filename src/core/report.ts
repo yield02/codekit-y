@@ -1,3 +1,4 @@
+import { artifactKind } from "./artifacts.js";
 import { isTrackable } from "./codemap.js";
 import { hashContent } from "./hash.js";
 import { readLineage } from "./lineage.js";
@@ -17,6 +18,8 @@ export interface BranchReport {
   percent: number;
   missing: string[];
   stale: { path: string; reason: string }[];
+  /** AI files committed to the source branch (rules, plans, tool config…): the guard was bypassed or not installed. */
+  artifacts: { path: string; kind: string }[];
   lastActivity?: string;
 }
 
@@ -40,12 +43,18 @@ export function readBranchMaps(ws: Workspace, branch: string): Map<string, MapFi
 export function branchReport(ws: Workspace, branch: string): BranchReport {
   const lineage = readLineage(ws.store, branch);
   const ref = ws.source.resolveBranch(branch);
-  const base: BranchReport = { branch, parent: lineage?.parent ?? null, sourceRef: ref, total: 0, mapped: 0, percent: 0, missing: [], stale: [] };
+  const base: BranchReport = { branch, parent: lineage?.parent ?? null, sourceRef: ref, total: 0, mapped: 0, percent: 0, missing: [], stale: [], artifacts: [] };
   const lastEvent = lineage?.events.at(-1)?.at;
   if (lastEvent) base.lastActivity = lastEvent;
   if (!ref) return base;
 
-  const files = ws.source.listFilesAt(ref).filter((f) => isTrackable(ws, f));
+  const all = ws.source.listFilesAt(ref);
+  const rules = { extra: ws.config.guard.artifactPaths, allow: ws.config.guard.allowPaths };
+  for (const path of all) {
+    const kind = artifactKind(path, rules);
+    if (kind) base.artifacts.push({ path, kind });
+  }
+  const files = all.filter((f) => isTrackable(ws, f));
   const contents = ws.source.catFiles(ref, files);
   const maps = readBranchMaps(ws, branch);
   for (const path of files) {
@@ -80,16 +89,21 @@ export function formatReportMarkdown(report: ProjectReport, detailLimit = 15): s
     "",
     `Generated ${report.generatedAt.slice(0, 16).replace("T", " ")} UTC from committed source.`,
     "",
-    "| Branch | From | Coverage | Missing | Stale | Last activity |",
-    "|---|---|---|---|---|---|",
+    "| Branch | From | Coverage | Missing | Stale | AI files | Last activity |",
+    "|---|---|---|---|---|---|---|",
   ];
   for (const b of report.branches) {
     const coverage = b.sourceRef ? `${b.mapped}/${b.total} (${b.percent}%)` : "branch not in source";
-    lines.push(`| \`${b.branch}\` | ${b.parent ? `\`${b.parent}\`` : "—"} | ${coverage} | ${b.missing.length} | ${b.stale.length} | ${b.lastActivity?.slice(0, 10) ?? "—"} |`);
+    lines.push(`| \`${b.branch}\` | ${b.parent ? `\`${b.parent}\`` : "—"} | ${coverage} | ${b.missing.length} | ${b.stale.length} | ${b.artifacts.length ? `⚠ ${b.artifacts.length}` : "0"} | ${b.lastActivity?.slice(0, 10) ?? "—"} |`);
   }
   for (const b of report.branches) {
-    if (!b.stale.length && !b.missing.length) continue;
+    if (!b.stale.length && !b.missing.length && !b.artifacts.length) continue;
     lines.push("", `### \`${b.branch}\``);
+    if (b.artifacts.length) {
+      lines.push("", "AI files committed to the source repo (remove them; move plans/rules to the knowledge store):");
+      for (const a of b.artifacts.slice(0, detailLimit)) lines.push(`- \`${a.path}\` (${a.kind})`);
+      if (b.artifacts.length > detailLimit) lines.push(`- …${b.artifacts.length - detailLimit} more`);
+    }
     if (b.stale.length) {
       lines.push("", "Stale:");
       for (const s of b.stale.slice(0, detailLimit)) lines.push(`- \`${s.path}\` (${s.reason})`);

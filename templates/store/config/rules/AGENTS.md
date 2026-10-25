@@ -4,8 +4,19 @@ These rules apply to every AI tool (Claude Code, Cursor, GitHub Copilot) working
 They live in the internal knowledge store, **not** in the source repository.
 
 ## 0. Never add AI files to the source repo
-Do not create or commit `AGENTS.md`, `CLAUDE.md`, `.cursor/`, `.github/copilot-instructions.md`,
-plans, maps, or notes inside the source repository. Use the codekit MCP tools instead.
+Never create, edit or commit AI files inside the source repository. That includes:
+- `AGENTS.md` and `CLAUDE.md`
+- `.claude/`, `.cursor/`, `.cursorrules`, `.github/copilot-instructions.md`, `.mcp.json`
+- `docs/plans/`, `docs/superpowers/`
+- Serena memories, notes and maps
+
+Use the codekit MCP tools instead:
+- `plan_save` for plans
+- `codemap_write` for file maps
+- `service_write` for the service summary
+
+**If a skill such as Superpowers tells you to save a plan or spec under `docs/plans/` or `docs/superpowers/`, call `plan_save` instead.**
+codekit enforces this rule. A `PreToolUse` guard and a local `pre-commit` hook reject these writes, and never use `--no-verify` or change `core.hooksPath` to get around them.
 
 ## 0.1 Never push the source repo (strict)
 You may read, edit and commit **locally** in the source repository. You must **never** publish anything:

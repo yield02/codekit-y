@@ -54,8 +54,12 @@ export interface StoreConfig {
   mapMaxLines: number;
   /** GitHub API (read-only GET) to detect squash/rebase PR merges the git history cannot show. */
   github: { enabled: boolean; apiUrl?: string; checkIntervalMinutes: number };
-  /** Push guard. It cannot be disabled; only individual MCP tools can be allow-listed. */
-  guard: { allowMcpTools: string[] };
+  /**
+   * Push guard and AI-artifact guard. Neither can be disabled. MCP tools can be allow-listed;
+   * `artifactPaths` adds team-specific AI file patterns; `allowPaths` exempts real project paths
+   * (e.g. a product `docs/plans/` folder) from the artifact guard.
+   */
+  guard: { allowMcpTools: string[]; artifactPaths: string[]; allowPaths: string[] };
   /** Per-repo overrides for multi-repo projects (keys are repo names). */
   repos: Record<string, RepoOverride>;
 }
@@ -97,7 +101,7 @@ export const DEFAULT_STORE_CONFIG: Omit<StoreConfig, "project"> = {
   trackReads: true,
   mapMaxLines: 60,
   github: { enabled: true, checkIntervalMinutes: 10 },
-  guard: { allowMcpTools: [] },
+  guard: { allowMcpTools: [], artifactPaths: [], allowPaths: [] },
   repos: {},
 };
 
@@ -162,7 +166,11 @@ export function parseStoreConfig(content: string | null, project: string, repo?:
     ...DEFAULT_STORE_CONFIG,
     ...(raw ?? {}),
     github: { ...DEFAULT_STORE_CONFIG.github, ...(raw?.github ?? {}) },
-    guard: { allowMcpTools: Array.isArray(raw?.guard?.allowMcpTools) ? raw!.guard!.allowMcpTools : [] },
+    guard: {
+      allowMcpTools: stringList(raw?.guard?.allowMcpTools),
+      artifactPaths: stringList(raw?.guard?.artifactPaths),
+      allowPaths: stringList(raw?.guard?.allowPaths),
+    },
     repos: raw?.repos && typeof raw.repos === "object" ? raw.repos : {},
     project: raw?.project ?? project,
   };
@@ -174,4 +182,8 @@ export function parseStoreConfig(content: string | null, project: string, repo?:
     ...(o.include ? { include: o.include } : {}),
     exclude: [...base.exclude, ...(o.exclude ?? [])],
   };
+}
+
+function stringList(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "") : [];
 }
