@@ -23,8 +23,8 @@ jobs:
           - { os: windows-latest, node: 24 }
           - { os: macos-latest, node: 22 }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
       - run: git --version
@@ -53,8 +53,8 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git python3 ca-certificates curl xz-utils >/dev/null
           git --version
           python3 --version
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - run: git config --global --add safe.directory '*'

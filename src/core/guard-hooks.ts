@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { matchesGlob } from "./glob.js";
+import { canonicalPath } from "./paths.js";
 import { artifactKind, denyAdvice, hookBypass, mcpWriteTargets, shellWriteTargets, type ArtifactRules } from "./artifacts.js";
 import { checkMcpTool, checkShellCommand, commandTargetDirs, type GuardVerdict } from "./guard.js";
 import { createLogger, withCorrelation } from "./logger.js";
@@ -173,7 +174,7 @@ function ownerOf(abs: string) {
 }
 
 function isRepoRoot(root: string, abs: string): boolean {
-  return resolve(root) === resolve(abs);
+  return resolve(root) === resolve(abs) || canonicalPath(root) === canonicalPath(abs);
 }
 
 const rulesCache = new Map<string, ArtifactRules>();

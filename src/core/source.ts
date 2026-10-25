@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { isAbsolute, relative, resolve } from "node:path";
 import { git, gitRaw, GitError } from "./git.js";
-import { toPosix } from "./paths.js";
+import { canonicalPath, toPosix } from "./paths.js";
 
 /**
  * Git subcommands the kit may run against a source repository. Source repos are
@@ -44,7 +44,7 @@ export class SourceRepo {
 
   static open(cwd: string): SourceRepo | null {
     const root = readGit(["rev-parse", "--show-toplevel"], cwd);
-    return root ? new SourceRepo(resolve(root)) : null;
+    return root ? new SourceRepo(canonicalPath(root)) : null;
   }
 
   private git(args: string[]): string | null {
@@ -159,9 +159,11 @@ export class SourceRepo {
   /** Repo-relative posix path, or null when the path lies outside the repo. */
   relativePath(path: string): string | null {
     const abs = isAbsolute(path) ? path : resolve(this.root, path);
-    const rel = relative(this.root, abs);
-    if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
-    return toPosix(rel);
+    const inside = (r: string) => !!r && !r.startsWith("..") && !isAbsolute(r);
+    let rel = relative(this.root, abs);
+    // Same file through a symlink or a Windows short name: compare canonical paths.
+    if (!inside(rel)) rel = relative(this.root, canonicalPath(abs));
+    return inside(rel) ? toPosix(rel) : null;
   }
 
   absolutePath(rel: string): string {
