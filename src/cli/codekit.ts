@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { Command } from "commander";
 import { loadUserConfig } from "../core/config.js";
 import { tryGit } from "../core/git.js";
 import { readLineage } from "../core/lineage.js";
+import { resolveRoots } from "../core/parent.js";
 import { formatLog, formatNoiseReport, matches, noiseReport, parseLogLine, sinceToIso, type ParsedLog } from "../core/logview.js";
 import { packageRoot, userConfigPath } from "../core/paths.js";
 import { createProjectStore, initAll, initRepo, preCommitGuardInstalled, prePushGuardInstalled } from "../core/setup.js";
-import { applyChanges, defaultToolDirs, planCursor, planVsCode, USER_RULES, VSCODE_SETTINGS_SNIPPET } from "../core/tools-setup.js";
+import { claudeAddCommand, findSerena, indexCommand, planSerenaConfig, SERENA_INSTALL, serenaStatus } from "../core/serena.js";
+import { applyChanges, defaultToolDirs, parseJsonc, planCursor, planVsCode, USER_RULES, VSCODE_SETTINGS_SNIPPET } from "../core/tools-setup.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { fail, print } from "./shared.js";
 
@@ -86,21 +88,60 @@ program
 
 program
   .command("setup-tools")
-  .description("Write user-level config for Cursor and VS Code/Copilot: MCP server, push-guard hooks, instructions")
+  .description("Write user-level config for Claude Code, Cursor and VS Code/Copilot: MCP servers (codemap + Serena), push-guard hooks, instructions")
+  .option("--claude", "configure Claude Code (Serena as a user-scope MCP server; codemap comes with the plugin)")
   .option("--cursor", "configure Cursor (~/.cursor)")
   .option("--vscode", "configure VS Code / Copilot (user data dir)")
+  .option("--no-serena", "do not configure Serena")
+  .option("--install-serena", "install Serena with uv when it is missing (uv tool install -p 3.13 serena-agent && serena init)")
   .option("--dry-run", "show what would change without writing", false)
-  .action((opts: { cursor?: boolean; vscode?: boolean; dryRun: boolean }) => {
-    const both = !opts.cursor && !opts.vscode;
+  .action((opts: { claude?: boolean; cursor?: boolean; vscode?: boolean; serena: boolean; installSerena?: boolean; dryRun: boolean }) => {
+    const all = !opts.claude && !opts.cursor && !opts.vscode;
     const dirs = defaultToolDirs();
-    const changes = [...(both || opts.cursor ? planCursor(dirs) : []), ...(both || opts.vscode ? planVsCode(dirs) : [])];
+    const notes: string[] = [];
+
+    let install = findSerena();
+    if (opts.serena && !install.executable && opts.installSerena && !opts.dryRun) {
+      if (!install.uv) throw new Error("uv is not installed; see https://docs.astral.sh/uv/getting-started/installation/ then run again.");
+      runVisible("uv", [...SERENA_INSTALL].slice(1));
+      install = findSerena();
+      if (install.executable) runVisible(install.executable, ["init"]);
+    }
+    const serena = opts.serena ? install.executable : null;
+    if (opts.serena && !serena) {
+      notes.push(install.uv
+        ? "Serena (structural map layer) is not installed: run `uv tool install -p 3.13 serena-agent` and `serena init`, or re-run with --install-serena."
+        : "Serena needs uv: install it from https://docs.astral.sh/uv/getting-started/installation/, then re-run with --install-serena.");
+    }
+
+    const changes = [
+      ...(all || opts.cursor ? planCursor(dirs, { serena }) : []),
+      ...(all || opts.vscode ? planVsCode(dirs, { serena }) : []),
+      ...(serena ? [planSerenaConfig()] : []),
+    ];
+    if (!opts.dryRun) applyChanges(changes.filter((c) => c.action !== "skipped"));
+
+    if (serena && (all || opts.claude)) {
+      const claudeArgs = claudeAddCommand(serena);
+      const shown = `claude ${claudeArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ")}`;
+      const registered = spawnSync("claude mcp get serena", { shell: true, encoding: "utf8", timeout: 20_000 });
+      if (registered.status === 0) notes.push("Claude Code: a \"serena\" MCP server is already registered (claude mcp get serena); left as is.");
+      else if (registered.error || /not recognized|not found/i.test(`${registered.stderr}`)) notes.push(`Claude Code CLI not found. Register Serena yourself:\n  ${shown}`);
+      else if (opts.dryRun) notes.push(`Claude Code: would run\n  ${shown}`);
+      else {
+        const res = spawnSync(shown, { shell: true, encoding: "utf8", timeout: 60_000 });
+        notes.push(res.status === 0 ? "Claude Code: Serena registered as a user-scope MCP server." : `Claude Code: registering Serena failed (${(res.stderr || res.stdout).trim()}). Run:\n  ${shown}`);
+      }
+    }
+
     const lines = changes.map((c) => `${c.action.padEnd(9)} ${c.file}\n          ${c.detail}`);
-    if (!opts.dryRun) applyChanges(changes);
-    const skipped = changes.filter((c) => c.action === "skipped" && c.content);
+    const skipped = changes.filter((c) => c.action === "skipped" && "content" in c && c.content);
     print([
       opts.dryRun ? "Dry run — nothing written:" : "User-level tool config:",
       ...lines,
-      ...skipped.flatMap((c) => ["", `Merge manually into ${c.file}:`, c.content!]),
+      ...skipped.flatMap((c) => ["", `Merge manually into ${c.file}:`, (c as { content: string }).content]),
+      ...(serena ? ["", `Serena ${install.version ?? ""}: ${serena} (memories off, no dashboard pop-up, .serena/ kept outside the repos). Index large repos once with: codekit serena index -C <repo or parent folder>`] : []),
+      ...notes.flatMap((n) => ["", n]),
       "",
       "Cursor: also paste these lines into Settings → Rules → User Rules:",
       USER_RULES.split("\n").slice(0, 5).join("\n"),
@@ -108,6 +149,25 @@ program
       "VS Code: add to your user settings.json so agent pushes always need your approval:",
       JSON.stringify(VSCODE_SETTINGS_SNIPPET, null, 2),
     ].join("\n"), false);
+  });
+
+const serenaCmd = program.command("serena").description("Serena (structural map layer) helpers");
+serenaCmd
+  .command("index")
+  .description("Index a repo, or every registered repo of a parent folder, so Serena's first symbol lookup is fast")
+  .option("-C, --repo <dir>", "repo or parent folder", process.cwd())
+  .action((opts: { repo: string }) => {
+    const install = findSerena();
+    if (!install.executable) throw new Error("Serena is not installed: codekit setup-tools --install-serena");
+    const res = resolveRoots([opts.repo], "cli");
+    const repos = res.kind === "repo" ? [res.ws] : res.kind === "parent" ? res.parent.workspaces : [];
+    if (!repos.length) throw new Error(`No registered repo at ${opts.repo}.`);
+    for (const ws of repos) {
+      print(`== ${ws.repo.name} (${ws.source.root})`, false);
+      const [cmd, ...args] = indexCommand(install.executable);
+      const r = spawnSync(cmd!, args, { cwd: ws.source.root, stdio: "inherit" });
+      if (r.status !== 0) process.exitCode = 1;
+    }
   });
 
 program
@@ -189,6 +249,27 @@ program
     checks.push(["git", !!gitV, gitV || "not found"]);
     const uvV = has("uv");
     checks.push(["uv (for Serena)", !!uvV, uvV || "not found — install uv to use Serena"]);
+    const sv = serenaStatus();
+    checks.push(["serena", !!sv.install.executable, sv.install.executable ? `${sv.install.version ?? "?"} ${sv.install.executable}` : "not installed — codekit setup-tools --install-serena"]);
+    if (sv.install.executable) {
+      checks.push(["serena config", sv.config.exists && sv.config.dashboardQuiet && sv.config.folderOutsideRepo,
+        !sv.config.exists ? "missing — run `serena init`, then `codekit setup-tools`"
+          : [sv.config.dashboardQuiet ? "dashboard quiet" : "dashboard pops up (run codekit setup-tools)", sv.config.folderOutsideRepo ? ".serena/ outside repos" : ".serena/ inside repos (run codekit setup-tools)"].join(", ")]);
+      const dirs = defaultToolDirs();
+      const inJson = (file: string, key: "mcpServers" | "servers") => {
+        try {
+          return !!(parseJsonc(readFileSync(file, "utf8"))?.[key] as Record<string, unknown> | undefined)?.serena;
+        } catch {
+          return false;
+        }
+      };
+      const where = [
+        inJson(join(dirs.cursorDir, "mcp.json"), "mcpServers") ? "Cursor" : "",
+        inJson(join(dirs.vscodeUserDir, "mcp.json"), "servers") ? "VS Code" : "",
+        spawnSync("claude mcp get serena", { shell: true, encoding: "utf8", timeout: 20_000 }).status === 0 ? "Claude Code" : "",
+      ].filter(Boolean);
+      checks.push(["serena in AI tools", where.length > 0, where.length ? where.join(", ") : "not configured — run codekit setup-tools"]);
+    }
     const claudeV = has("claude");
     checks.push(["claude CLI", !!claudeV, claudeV || "not found (only needed for Claude Code)"]);
     const mcpOk = existsSync(join(packageRoot(), "dist", "mcp", "main.js"));
@@ -217,6 +298,12 @@ program
     print(checks.map(([name, ok, detail]) => `${ok ? "✔" : "✘"} ${name.padEnd(22)} ${detail}`).join("\n"), false);
     if (checks.some(([name, ok]) => !ok && ["git", "repo registered", "store reachable"].includes(name))) process.exitCode = 1;
   });
+
+/** Run a setup command with its output visible to the user (installers, `serena init`). */
+function runVisible(cmd: string, args: string[]): void {
+  const res = spawnSync(cmd, args, { stdio: "inherit", shell: process.platform === "win32" && !/\.exe$/i.test(cmd) });
+  if (res.status !== 0) throw new Error(`\`${cmd} ${args.join(" ")}\` failed (exit ${res.status}).`);
+}
 
 function parseBackend(v: string): "git" | "folder" {
   if (v !== "git" && v !== "folder") throw new Error(`--backend must be git or folder, got "${v}"`);

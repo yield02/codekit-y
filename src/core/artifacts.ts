@@ -183,7 +183,7 @@ export function mcpWriteTargets(toolName: string, input: Record<string, unknown>
     const name = typeof input?.memory_file_name === "string" ? input.memory_file_name : "memory.md";
     return [`.serena/memories/${name}`];
   }
-  if (!MCP_WRITE_WORD.test(tool.split(/[_-]/)[0] ?? "") && !/(write|create|replace|insert|edit)/.test(tool)) return [];
+  if (!MCP_WRITE_WORD.test(tool.split(/[_-]/)[0] ?? "") && !/(write|create|replace|insert|edit|delete|rename)/.test(tool)) return [];
   const out: string[] = [];
   for (const key of PATH_KEYS) {
     const v = input?.[key];

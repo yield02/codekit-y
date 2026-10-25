@@ -37,6 +37,7 @@ A kit for AI-assisted source code management. It helps AI tools (Claude Code, Cu
   - Every path is routed to its own repo: `Core/src/x.ts` and `core:src/x.ts` both work.
   - Session context covers every repo, and the Stop hook lists missing maps per repo.
   - Every push-like command is denied.
+- **Serena (structural layer)** is set up by `codekit setup-tools` for Claude Code, Cursor and VS Code, using the classic tool interface with memories off. The dashboard does not pop up, and Serena's `.serena/` data stays outside the repos. Run `codekit serena index` once for large repos.
 - **`codemap-mcp`** is the single access point for all three AI tools. All configuration lives at user level.
 - **Claude Code plugin** (`codekit`):
   - `SessionStart` syncs and injects the rules.
@@ -80,8 +81,8 @@ claude plugin install codekit@codekit-y
 claude plugin marketplace add obra/superpowers-marketplace
 claude plugin install superpowers@superpowers-marketplace
 
-# 5. Cursor / Copilot: user-level MCP server, push-guard hooks (Cursor), Copilot instructions
-node dist/cli/codekit.js setup-tools --dry-run   # then without --dry-run
+# 5. Serena + Cursor / Copilot / Claude Code user-level config (MCP servers, push-guard hooks, instructions)
+node dist/cli/codekit.js setup-tools --dry-run   # then without --dry-run; add --install-serena if Serena is missing
 
 # 6. Check everything
 node dist/cli/codekit.js doctor -C path/to/shop
@@ -95,7 +96,8 @@ Optionally run `npm link` to get `codekit`, `codemap` and `codemap-mcp` on your 
 |---|---|
 | `codekit project create <name> --backend git\|folder` | Scaffold a knowledge store from `templates/store` |
 | `codekit init --project <name> ...` | Register a source repo (user config `~/.codekit/config.yaml`) |
-| `codekit setup-tools [--cursor] [--vscode] [--dry-run]` | Write user-level Cursor/VS Code config, with backups (MCP, guard hooks, instructions) |
+| `codekit setup-tools [--claude] [--cursor] [--vscode] [--no-serena] [--install-serena] [--dry-run]` | User-level config for Claude Code, Cursor and VS Code, with backups: codemap + Serena MCP servers, guard hooks, instructions, Serena global config |
+| `codekit serena index [-C repo\|parent]` | Index repos once so Serena's first symbol lookup is fast |
 | `codekit mcp-config` | Print MCP snippets for Cursor and VS Code |
 | `codekit doctor` | Check the setup |
 | `codekit logs [files] [--cid] [--tag] [--level] [--trace <cid>] [--stats]` | Read convention JSON logs from any stack: filter, trace one request, or run a noise report |

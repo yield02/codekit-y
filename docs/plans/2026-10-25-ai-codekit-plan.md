@@ -43,7 +43,23 @@ The team needs a kit that helps AI tools (Claude Code, Cursor, GitHub Copilot) a
 | Tool | **Serena MCP** (LSP: tsserver, JDTLS, C# LS, pyright) | AI-written `.md` maps stored in the knowledge store |
 | Content | symbols, references, outlines | purpose, public API, main flows, caveats, dependencies |
 | Created when | queried on demand | lazily — when the AI reads/edits a file whose map is missing or stale |
-| Stored where | local cache (`.serena/` excluded via `.git/info/exclude`, never committed) | knowledge store (separate git repo / shared folder) |
+| Stored where | Serena's own data, kept **outside** the repos (`~/.codekit/serena/<folder>/.serena`) | knowledge store (separate git repo / shared folder) |
+
+**Serena setup** (`codekit setup-tools`, verified against Serena 2.1.0):
+- **Install:** `uv tool install -p 3.13 serena-agent` and `serena init`, or `setup-tools --install-serena`. The kit writes the **absolute path** of the `serena` executable into each tool's config, because GUI clients often lack the shell `PATH`.
+- **Launch:** `serena start-mcp-server --context <claude-code|ide|vscode> --project-from-cwd --agent-interface tools --add-mode no-memories --open-web-dashboard False`.
+  - `--agent-interface tools`: Serena 2.x defaults to a REPL interface, a single `serena_repl` tool that runs code. Through it, reads and edits would be invisible to the tracking hook and the artifact guard. The classic interface exposes `find_symbol`, `get_symbols_overview`, `find_referencing_symbols`, `replace_symbol_body`, … (15 tools, each with `relative_path`).
+  - `--add-mode no-memories`: no memory or onboarding tools. Notes go to codemap.
+- **Global config** (`~/.serena/serena_config.yml`, merged with comments kept):
+  - `web_dashboard_open_on_launch: false`
+  - `project_serena_folder_location: ~/.codekit/serena/$projectFolderName/.serena`
+  - Existing in-repo `.serena/` folders keep working.
+- **Per tool:**
+  - Claude Code: `claude mcp add --scope user serena -- …`, run by setup-tools when the `claude` CLI exists, otherwise printed.
+  - Cursor `~/.cursor/mcp.json` and VS Code user `mcp.json`: written directly. A user's own `serena` entry is never replaced.
+- **Project activation:** `--project-from-cwd` activates the repo the tool was opened in. From a parent folder (`Transfer/`) no repo is active; the session context lists each repo root so the agent calls `activate_project`.
+- `codekit serena index -C <repo|parent>` indexes once for a fast first lookup. `doctor` checks uv, serena, its config and which tools have it.
+- `replace_in_files` (folder + globs) is checked file by file by the artifact guard.
 
 ### 2.2 `codemap-mcp` — the single access point for all 3 AI tools
 The AI **never reads/writes the knowledge store directly**; every operation goes through the MCP server, so behavior is the same across Claude/Cursor/Copilot and both backends. The server computes hash, branch and author itself. Every tool also accepts `repoPath` and `repo` (to pick a repo when the workspace is a parent folder).
@@ -289,7 +305,7 @@ codekit-y/
 | # | Step | Why | Size |
 |---|---|---|---|
 | 1 | ~~Block AI artifacts in source repos~~ **done**: artifact guard (4.8), with 4 layers, 71 tests, and a smoke test through the real CLI | Closed the Superpowers gap (4.4) | done |
-| 2 | **Serena wiring**: `setup-tools` adds the Serena MCP server (when `uv` is present) for Claude/Cursor/VS Code; `doctor` checks it | Layer 1 of the map is documented but not configured by the kit | 1 day |
+| 2 | ~~Serena wiring~~ **done**: `setup-tools` configures Serena for Claude Code, Cursor and VS Code, `codekit serena index`, and `doctor` checks. Verified with the real Serena 2.1.0 in an isolated uv environment: launch with the written config, 15 symbol tools, no memory tools, `.serena/` outside the repo, indexing | Layer 1 of the map is now set up by the kit | done |
 | 3 | **Live verification spike** on a real machine with Claude Code, Cursor and VS Code: plugin install + hooks in a real session, Cursor hook payload names, Copilot user-instruction loading, Serena start-up time on each stack | Several integrations are written to the docs but untested in the real tools | 2–3 days |
 | 4 | **Compile the Java and .NET samples** and the log4j2/NLog/MEL guides on a machine with JDK 17+/.NET 8 SDK; add the same redaction, size limits and repeat collapse that Node/Python have | Not compiled so far | 2–3 days |
 | 5 | **Pilot** on the Transfer project (Transactions, Core, Abs, Admin) with 2–3 developers for 2 weeks, git backend | Real numbers: tokens and time per question with and without maps, coverage growth, conflicts/stale entries, guard false positives, hook latency | 2 weeks |
@@ -306,6 +322,8 @@ codekit-y/
 - **Store layout changed** in PR #4 (`maps/<repo>/<branch>`, `repos/<repo>/…`): stores made earlier must be recreated (none are in use).
 - **Java/.NET samples not compiled**: step 7.2-4.
 - **Serena slow on large Java/.NET repos**: measured in step 7.2-3; fallback `codebase-memory-mcp` / `code-graph-mcp`.
+  - Serena downloads language servers on first use: JDTLS with a JRE for Java, .NET 10 with Roslyn for C# (which needs `pwsh` on Windows), and pyright via `uvx`. That needs network access to GitHub, NuGet and npm, or a pre-run of `serena download-ls-dependencies`.
+- **Serena changes its interface between versions** (REPL by default in 2.x, the `ide-assistant` context renamed): the kit pins the flags it relies on, and the version in use is shown by `doctor`.
 - **Knowledge store security** (maps describe customer code): internal store, per-project permissions, never uploaded to external services.
 
 ## 9. Verification
