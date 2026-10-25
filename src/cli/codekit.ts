@@ -9,7 +9,7 @@ import { tryGit } from "../core/git.js";
 import { readLineage } from "../core/lineage.js";
 import { formatLog, formatNoiseReport, matches, noiseReport, parseLogLine, sinceToIso, type ParsedLog } from "../core/logview.js";
 import { packageRoot, userConfigPath } from "../core/paths.js";
-import { createProjectStore, initAll, initRepo, prePushGuardInstalled } from "../core/setup.js";
+import { createProjectStore, initAll, initRepo, preCommitGuardInstalled, prePushGuardInstalled } from "../core/setup.js";
 import { applyChanges, defaultToolDirs, planCursor, planVsCode, USER_RULES, VSCODE_SETTINGS_SNIPPET } from "../core/tools-setup.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { fail, print } from "./shared.js";
@@ -51,11 +51,12 @@ program
     const entry = results.at(-1)!.entry;
     const plugin = `${packageRoot().replace(/\\/g, "/")}`;
     print([
-      ...results.map(({ repo, source, guard }) =>
-        `Registered ${source.root} as repo "${repo.name}" · push guard: ${guard.installed ? `pre-push hook installed${guard.chained ? " (chaining your hook)" : ""}` : `NOT installed — ${guard.reason}`}`),
+      ...results.map(({ repo, source, guard, artifactGuard }) =>
+        `Registered ${source.root} as repo "${repo.name}" · git hooks: ${guard.installed && artifactGuard.installed ? `pre-push + pre-commit installed${guard.chained || artifactGuard.chained ? " (chaining your hooks)" : ""}` : `NOT installed — ${guard.reason ?? artifactGuard.reason}`}`),
       `Project "${entry.name}" (${entry.store.backend} store) now has ${entry.repos.length} repo${entry.repos.length === 1 ? "" : "s"}: ${entry.repos.map((r) => r.name).join(", ")}.`,
       `User config: ${userConfigPath()}`,
-      "AI agents can edit and commit locally but never push. Open the AI tool on one repo or on the parent folder; both work.",
+      "AI agents can edit and commit locally but never push, and never add AI files (rules, plans, tool config) to the repos.",
+      "Open the AI tool on one repo or on the parent folder; both work.",
       "",
       "Claude Code (once per machine):",
       `  claude plugin marketplace add "${plugin}"`,
@@ -207,6 +208,8 @@ program
         checks.push(["branch map", true, mapExists ? `${w.branch} (from ${lineage?.parent ?? "root"})` : `${w.branch} — will be created on first use`]);
         const guarded = prePushGuardInstalled(w.source);
         checks.push(["push guard (pre-push)", guarded, guarded ? "installed" : w.source.hooksPath() ? "core.hooksPath set; relying on PreToolUse/Cursor guards" : "missing — run `codekit init` again"]);
+        const artifactGuarded = preCommitGuardInstalled(w.source);
+        checks.push(["artifact guard (pre-commit)", artifactGuarded, artifactGuarded ? "installed" : w.source.hooksPath() ? "core.hooksPath set; relying on PreToolUse guard + report" : "missing — run `codekit init` again"]);
       } catch (err) {
         checks.push(["store reachable", false, err instanceof Error ? err.message : String(err)]);
       }

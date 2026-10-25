@@ -46,9 +46,16 @@ github:
   checkIntervalMinutes: 10
 
 # Push guard: AI agents may edit and commit locally in the source repo but NEVER push.
-# The guard cannot be turned off. Only MCP tools listed here are exempt (e.g. issue comments).
+# Artifact guard: AI agents may not create or change AI files in the source repo
+# (AGENTS.md, CLAUDE.md, .cursor/, .claude/, docs/plans/, docs/superpowers/, …).
+# Neither guard can be turned off.
 guard:
+  # MCP tools exempt from the push guard (e.g. issue comments)
   allowMcpTools: []
+  # Extra AI file patterns for this team (globs, repo-relative)
+  artifactPaths: []
+  # Real project paths that look like AI files, e.g. a product "docs/plans/**" folder
+  allowPaths: []
 
 # Repos (services) of this project. `codekit init` adds each repo the first time it is
 # registered, so every developer uses the same names. Optional per-repo overrides:

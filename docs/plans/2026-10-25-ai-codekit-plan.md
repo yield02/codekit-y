@@ -185,8 +185,7 @@ Lineage files are unioned. Conflicting plans are kept side by side (`<name>.from
 - Superpowers is installed at user level (`codekit init` prints the commands).
 - Workflow (SessionStart + `rules/AGENTS.md`): explore → `brainstorming`; feature → `brainstorming` → `writing-plans` → `executing-plans`/`subagent-driven-development` + `test-driven-development`; bug → `systematic-debugging`.
 - **Plans are never written into the source repo.** They are saved with `plan_save` into `plans/` of the repo's map branch.
-  - **Open gap:** Superpowers itself writes plans to `docs/plans/` (or `docs/superpowers/`) inside the repo, and today only the rules forbid that.
-  - **Next step (7.2):** deny AI-artifact writes in registered repos through `PreToolUse` and redirect them to `plan_save`.
+  - Superpowers itself writes plans to `docs/plans/` or `docs/superpowers/`. The artifact guard (4.8) denies those writes and its message tells the agent to call `plan_save` instead.
 - Cursor/Copilot get a condensed workflow in the MCP instructions.
 
 ### 4.5 Naming convention (requirement 5)
@@ -227,6 +226,31 @@ Lineage files are unioned. Conflicting plans are kept side by side (`<name>.from
 
 The guard cannot be disabled; only individual MCP tools can be allow-listed (`guard.allowMcpTools`). Copilot has no hook API: `setup-tools` prints a `chat.tools.terminal.autoApprove` snippet that forces manual approval of pushes.
 
+### 4.8 Artifact guard — no AI files in source repos (strict)
+"The source repo contains no AI files" is enforced, not just written in the rules:
+
+| Layer | Covers | Mechanism |
+|---|---|---|
+| 1. Agent hooks | Claude Code `PreToolUse` (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, `PowerShell`, `mcp__*`); Cursor `beforeShellExecution` / `beforeMCPExecution` | Denies creating or changing AI files wherever the write comes from: the file tools; shell redirections, `tee`, `touch`, `mkdir`, `cp`/`mv`, `sed -i`, PowerShell `Set-Content`/`Out-File`/`New-Item`/`Copy-Item`, `git add <file>`; MCP write tools (Serena memories and file edits, filesystem servers). The path is resolved from the cwd, from `cd` targets, absolutely, and against every sub-repo of a parent folder. The deny message says where the content belongs (`plan_save`, `codemap_write`, `service_write`, knowledge store rules). |
+| 2. `pre-commit` git hook | any process with an agent marker | Installed locally by `codekit init`, next to `pre-push`. Rejects agent commits that add or modify AI files, which covers writes the hooks cannot see (scripts, editors, other tools). Deleting AI files is allowed. Chains an existing hook. |
+| 3. Hook-bypass guard | Claude Code, Cursor | Denies `git commit/merge/… --no-verify`, `git -c core.hooksPath=…`, `git config core.hooksPath …`, and any write to `.git/hooks/**`. |
+| 4. Report | everyone, including Copilot | `codemap report` lists AI files present on each source branch (the "AI files" column). |
+
+- **AI files:**
+  - `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `GEMINI.md` at any depth
+  - `.cursorrules`, `.windsurfrules`, `.clinerules`
+  - `.github/copilot-instructions.md`, `.github/instructions|prompts|chatmodes/**`
+  - `.claude/**`, `.cursor/**`, `.windsurf/**`, `.continue/**`, `.aider*`, `.mcp.json`, `.vscode/mcp.json`
+  - `docs/plans/**`, `docs/superpowers/**` (at any depth), `.specify/**`
+  - `.serena/**`, `.codemap/**`, `.ua/**`, `memory-bank/**`
+  - `.git/hooks/**`
+- **Matching rules:** matching is case-insensitive. A pattern without `/` matches the file name at any depth.
+- **Per project** (`codekit.yaml`, `guard`):
+  - `artifactPaths` adds the team's own patterns.
+  - `allowPaths` exempts real project paths, for example a product `docs/plans/` folder.
+  - The guard itself cannot be disabled.
+- **Measured cost:** about 200 ms per guarded tool call on Windows, mostly Node start-up.
+
 ## 5. Kit repository — `codekit-y`
 ```
 codekit-y/
@@ -264,7 +288,7 @@ codekit-y/
 ### 7.2 Next steps (in order)
 | # | Step | Why | Size |
 |---|---|---|---|
-| 1 | **Block AI artifacts in source repos**: `PreToolUse` denies `Write`/`Edit` to `docs/plans/**`, `docs/superpowers/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**`, `.cursor/**`, `.github/copilot-instructions.md`, … in registered repos and points to `plan_save` / the store. Same for Cursor (`beforeShellExecution` cannot see file writes → rules + report check). | Closes the Superpowers gap (4.4); today only rules enforce "no AI files in the source repo" | 1–2 days |
+| 1 | ~~Block AI artifacts in source repos~~ **done**: artifact guard (4.8), with 4 layers, 71 tests, and a smoke test through the real CLI | Closed the Superpowers gap (4.4) | done |
 | 2 | **Serena wiring**: `setup-tools` adds the Serena MCP server (when `uv` is present) for Claude/Cursor/VS Code; `doctor` checks it | Layer 1 of the map is documented but not configured by the kit | 1 day |
 | 3 | **Live verification spike** on a real machine with Claude Code, Cursor and VS Code: plugin install + hooks in a real session, Cursor hook payload names, Copilot user-instruction loading, Serena start-up time on each stack | Several integrations are written to the docs but untested in the real tools | 2–3 days |
 | 4 | **Compile the Java and .NET samples** and the log4j2/NLog/MEL guides on a machine with JDK 17+/.NET 8 SDK; add the same redaction, size limits and repeat collapse that Node/Python have | Not compiled so far | 2–3 days |
@@ -272,7 +296,7 @@ codekit-y/
 | 6 | Rollout guide: team onboarding (`project create` once, `init --all` per developer, `setup-tools`), store permissions, backup | After the pilot | 1 day |
 
 ## 8. Risks & mitigations
-- **AI files written into the source repo** (Superpowers plans, rule files): rules today; `PreToolUse` deny in step 7.2-1.
+- **AI files written into the source repo** (Superpowers plans, rule files): the artifact guard (4.8). What remains: Cursor's own file-edit tool and Copilot edits have no pre-write hook. For those, the `pre-commit` hook (when an agent marker is present) and the report catch the files.
 - **Soft map enforcement for Cursor/Copilot** (no Stop hook): rules, periodic report, pilot data.
 - **Copilot push protection is weaker** (no hooks): manual-approval setting, rules, and the pre-push hook when an agent marker is present.
 - **Repos using `core.hooksPath`** (husky) do not get layer 2 of the push guard: `doctor` reports it, and layers 1 and 3 still apply.
