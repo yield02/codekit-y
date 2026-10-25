@@ -180,23 +180,24 @@ Body: `## Purpose` · `## Public API` · `## Main flow` · `## Caveats` (limit ~
 - Lint rules banning raw loggers (ESLint `no-console`, ArchUnit, BannedApiAnalyzers, ruff `TID251`): optional, when the project agrees.
 - `codemap`/`codemap-mcp` themselves log to this standard in `~/.codekit/logs/` (`tags: [codemap, mcp|hook|sync]`).
 
-## 5. Kit repository — `ai-codekit` (internal)
+## 5. Kit repository — `codekit-y`
 ```
-ai-codekit/
-├── packages/core/          # TS: storage adapter (git | folder), map model, hash, index, sync/merge, lineage
-├── packages/cli/           # codekit init|project create|doctor ; codemap status|sync|merge|lineage|view|report
-├── packages/mcp/           # codemap-mcp (stdio)
-├── plugins/claude-codekit/ # Claude plugin: hooks, skills (codemap, naming, logging), bundled MCP
-├── templates/store/        # knowledge store skeleton: codekit.yaml, rules/AGENTS.md, conventions/*, report workflow
-├── templates/user/         # Cursor User Rules, Copilot user instructions, mcp.json templates
-├── logging/{node,java,dotnet,python}/
-├── fixtures/{node,java,dotnet,python}-sample/
+codekit-y/
+├── src/core/             # TS: storage adapters (git | folder), map model, hash, index, sync/merge, lineage, hooks, logger
+├── src/cli/              # codekit init|project create|mcp-config|doctor ; codemap status|lookup|sync|merge|lineage|search|hook
+├── src/mcp/              # codemap-mcp (stdio)
+├── plugins/codekit/      # Claude plugin: hooks, skills (codemap, naming, logging), bundled MCP
+├── .claude-plugin/       # marketplace.json (the kit repo is a local Claude plugin marketplace)
+├── templates/store/      # knowledge store skeleton: codekit.yaml, rules/AGENTS.md, conventions/*
+├── logging/{node,java,dotnet,python}/   # (milestone 2)
+├── fixtures/{node,java,dotnet,python}-sample/   # (milestone 2)
 └── docs/
 ```
-- Written in Node/TS (Node 18+ on developer machines; Serena needs `uv`). `StorageAdapter` interface: `ensureBranch, read, write, list, merge, history, lock` — 2 implementations, `GitStorage` and `FolderStorage`.
-- `codekit project create --backend git|folder` → scaffold a knowledge store from the template.
-- `codekit init` (per developer, once per project): register remote ↔ store in `~/.codekit/config.yaml`, clone/mount the store, install the Claude plugin + Superpowers, write MCP into Cursor/VS Code user config, add `.git/info/exclude` entries.
-- `codekit doctor`: verify the whole setup (MCP runs, Serena has LSPs, store write access, GitHub token).
+- Written in Node/TS as a single package (Node 20+ on developer machines; Serena needs `uv`). The plugin is named `codekit` (plugin names starting with `claude-` are rejected by the plugin validator). Hooks and the bundled MCP server run `node <kit>/dist/...`, so the kit is used from a local clone via a local marketplace.
+- `StorageAdapter` interface: `refresh, readConfig, writeConfig, listBranches, hasBranch, createBranch, archiveBranch, read, write, list, baseSnapshot, commitMerge` — 2 implementations, `GitStorage` and `FolderStorage`.
+- `codekit project create <name> --backend git|folder` → scaffold a knowledge store from the template.
+- `codekit init` (per developer, once per project): register remote ↔ store in `~/.codekit/config.yaml`, clone the store, add `.git/info/exclude` entries, print plugin/MCP setup steps.
+- `codekit doctor`: verify the setup (kit built, Serena's `uv`, store reachable, branch map).
 
 ## 6. Reporting & enforcement (no CI in the source repo)
 - **Claude Code**: hard block via the `Stop` hook.

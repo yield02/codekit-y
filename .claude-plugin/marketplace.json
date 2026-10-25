@@ -1,0 +1,12 @@
+{
+  "name": "codekit-y",
+  "owner": { "name": "codekit-y" },
+  "description": "AI Code Kit: shared per-branch codebase maps stored outside the source repo",
+  "plugins": [
+    {
+      "name": "codekit",
+      "source": "./plugins/codekit",
+      "description": "Hooks, skills and MCP server for codekit (lazy codebase map, Superpowers workflow, naming and logging conventions)"
+    }
+  ]
+}
