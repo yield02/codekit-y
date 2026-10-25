@@ -55,6 +55,12 @@ See the [implementation plan](docs/plans/2026-10-25-ai-codekit-plan.md) for the 
 ## Quick start
 
 Requirements: Node.js 20+ and git on `PATH`. Serena additionally needs `uv`.
+- **Tested in CI** on every push (see `.github/workflows/ci.yml`):
+  - Ubuntu with Node 20, 22 and 24
+  - stock `ubuntu:22.04` (distribution Git 2.34 and Python 3.10) and `ubuntu:24.04` images
+  - Windows and macOS
+- **Linux:** the `nodejs` package in Ubuntu's apt is too old. Install Node 20+ from NodeSource, nvm or fnm. Distribution git works (2.5+).
+- **Git hooks:** the `pre-push` and `pre-commit` guards are POSIX `sh` scripts. Git for Windows runs them with its own `sh`.
 
 ```bash
 # 1. Build the kit (once per machine)

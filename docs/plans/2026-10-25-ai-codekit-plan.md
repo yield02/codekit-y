@@ -299,7 +299,7 @@ codekit-y/
 | #3 Logging adoption | `logging_detect`, adapter guides for 8 libraries/in-house loggers, `logging_set_project`, debug/noise rules in the wrappers, `codekit logs` (`--trace`, `--stats`) |
 | #4 Multi-repo | One store per project, per-repo maps/branches, store-owned repo names, cross-service lookups, service summaries, project view/search, parent-folder and multi-root workspaces, `init --all` |
 
-187 automated tests run for both backends. Smoke tests ran the real CLI and the MCP server over stdio on a single repo, on a two-service project, and on a parent folder.
+268 automated tests run for both backends. CI (`.github/workflows/ci.yml`) runs them on every push on Ubuntu (Node 20, 22 and 24), on stock `ubuntu:22.04` and `ubuntu:24.04` images with the distribution git and python3, on Windows and on macOS. The stock Ubuntu jobs also run the CLI smoke script and the Python and Node logging samples. Smoke tests ran the real CLI and the MCP server over stdio on a single repo, on a two-service project, and on a parent folder.
 
 ### 7.2 Next steps (in order)
 | # | Step | Why | Size |
@@ -327,6 +327,11 @@ codekit-y/
 - **Knowledge store security** (maps describe customer code): internal store, per-project permissions, never uploaded to external services.
 
 ## 9. Verification
+**Cross-platform findings, fixed through CI:**
+- **Root map branches on old Git:** they used `git worktree add --orphan`, which needs Git 2.42+, while Ubuntu 22.04 ships 2.34. They are now built with plumbing (`hash-object`, `mktree`, `commit-tree`).
+- **Path comparisons:** these are now canonical (`realpath`). Git reports canonical roots, so paths reached through symlinks (macOS `/var` → `/private/var`, a symlinked `/home`) or Windows 8.3 names (`RUNNER~1`) were treated as outside the repo. Hooks, guards and parent folders were affected.
+- **Tests:** a macrotask after each test keeps vitest's worker RPC from timing out on slow runners.
+
 1. **Automated (in place, `npm test`):**
    - unit tests
    - a storage contract suite run for both backends

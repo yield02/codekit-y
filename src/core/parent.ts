@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { loadUserConfig } from "./config.js";
+import { canonicalPath } from "./paths.js";
 import { SourceRepo } from "./source.js";
 import { findRegisteredSource, resolveWorkspace, type Workspace } from "./workspace.js";
 
@@ -23,7 +24,7 @@ const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "target", "b
 
 /** Resolve one or more roots (cwd, or MCP client roots) to a repo or a parent context. */
 export function resolveRoots(dirs: string[], tool = "codekit"): Resolution {
-  const roots = dirs.filter(Boolean).map((d) => resolve(d));
+  const roots = dirs.filter(Boolean).map((d) => canonicalPath(d));
   if (roots.length === 0) return { kind: "none", reason: "no directory" };
   let firstReason = "";
   if (roots.length === 1) {
@@ -113,8 +114,8 @@ export function folderOf(parent: ParentContext, ws: Workspace): string {
 }
 
 export function isInside(root: string, path: string): boolean {
-  const rel = relative(resolve(root), resolve(path));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  const ok = (r: string) => r === "" || (!r.startsWith("..") && !isAbsolute(r));
+  return ok(relative(resolve(root), resolve(path))) || ok(relative(canonicalPath(root), canonicalPath(path)));
 }
 
 /** Light version for the push guard (no store access): registered repos below `root`. */

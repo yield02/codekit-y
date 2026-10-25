@@ -1,10 +1,33 @@
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, posix } from "node:path";
+import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Kit install root (contains templates/ and plugins/), from both src/core and dist/core. */
 export function packageRoot(): string {
   return fileURLToPath(new URL("../../", import.meta.url));
+}
+
+/**
+ * Canonical absolute path: symlinks resolved (macOS `/var` -> `/private/var`, a symlinked
+ * `/home` on Linux) and Windows 8.3 short names expanded (`RUNNER~1`). Git reports canonical
+ * paths, so every comparison against a repo root goes through this. Works for paths that do
+ * not exist yet by resolving the nearest existing ancestor.
+ */
+export function canonicalPath(p: string): string {
+  let cur = resolve(p);
+  const rest: string[] = [];
+  while (!existsSync(cur)) {
+    const up = dirname(cur);
+    if (up === cur) return resolve(p);
+    rest.unshift(basename(cur));
+    cur = up;
+  }
+  try {
+    return join(realpathSync.native(cur), ...rest);
+  } catch {
+    return resolve(p);
+  }
 }
 
 /** Root of all per-user kit state. Overridable for tests and portable installs. */

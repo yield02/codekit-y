@@ -12,7 +12,7 @@ import { createProjectStore, initRepo } from "../src/core/setup.js";
 import { sync } from "../src/core/sync.js";
 import { collectProjectViewData } from "../src/core/view.js";
 import { resolveWorkspace, type Workspace } from "../src/core/workspace.js";
-import { IDENTITY, MAP_BODY, sh, tempDir, writeSource } from "./helpers.js";
+import { IDENTITY, MAP_BODY, sh, tempDir, tick, writeSource } from "./helpers.js";
 
 interface MultiFixture {
   root: string;
@@ -23,7 +23,7 @@ interface MultiFixture {
 }
 
 /** Project "ABC" with services `core` and `product`, one shared knowledge store. */
-function createMulti(backend: BackendKind): MultiFixture {
+async function createMulti(backend: BackendKind): Promise<MultiFixture> {
   const root = tempDir("codekit-abc-");
   process.env.CODEKIT_HOME = join(root, "home");
   Object.assign(process.env, IDENTITY);
@@ -33,6 +33,7 @@ function createMulti(backend: BackendKind): MultiFixture {
 
   const repos: Record<string, string> = {};
   for (const name of ["core", "product"]) {
+    await tick();
     const remote = join(root, "github", `abc-${name}.git`);
     execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
     const dir = join(root, name);
@@ -63,8 +64,8 @@ for (const backend of ["git", "folder"] as const) {
     let fx: MultiFixture;
     afterEach(() => { /* temp dirs left for the OS */ });
 
-    it("registers every repo of the project against one store", () => {
-      fx = createMulti(backend);
+    it("registers every repo of the project against one store", async () => {
+      fx = await createMulti(backend);
       const project = loadUserConfig().projects.find((p) => p.name === "ABC")!;
       expect(project.repos.map((r) => r.name).sort()).toEqual(["core", "product"]);
       const core = fx.ws("core");
@@ -74,8 +75,8 @@ for (const backend of ["git", "folder"] as const) {
       expect(core.store.readConfig("codekit.yaml")).toBe(product.store.readConfig("codekit.yaml")); // shared rules/conventions
     });
 
-    it("keeps each repo's maps and branches apart inside the shared store", () => {
-      fx = createMulti(backend);
+    it("keeps each repo's maps and branches apart inside the shared store", async () => {
+      fx = await createMulti(backend);
       const core = fx.ws("core");
       const product = fx.ws("product");
       sync(core);
@@ -93,16 +94,16 @@ for (const backend of ["git", "folder"] as const) {
       expect(readLineage(pf.store, "feature/discount")!.parent).toBe("main");
     });
 
-    it("a repo first seen on a feature branch is rooted at its default branch", () => {
-      fx = createMulti(backend);
+    it("a repo first seen on a feature branch is rooted at its default branch", async () => {
+      fx = await createMulti(backend);
       sh(fx.repos.core!, "checkout", "-q", "-b", "feature/first");
       const report = sync(fx.ws("core"));
       expect(report.created).toEqual({ branch: "feature/first", parent: "main" });
       expect(fx.ws("core").store.listBranches().sort()).toEqual(["feature/first", "main"]);
     });
 
-    it("looks up, references and searches other services", () => {
-      fx = createMulti(backend);
+    it("looks up, references and searches other services", async () => {
+      fx = await createMulti(backend);
       const core = fx.ws("core");
       const product = fx.ws("product");
       sync(core);
@@ -124,8 +125,8 @@ for (const backend of ["git", "folder"] as const) {
       expect(search(product, "user", 20, "repo")).toEqual([]);
     });
 
-    it("cross-repo maps of a service not cloned here are served as `remote`", () => {
-      fx = createMulti(backend);
+    it("cross-repo maps of a service not cloned here are served as `remote`", async () => {
+      fx = await createMulti(backend);
       const core = fx.ws("core");
       sync(core);
       sync(fx.ws("product"));
@@ -139,8 +140,8 @@ for (const backend of ["git", "folder"] as const) {
       writeFileSync(userConfigPath(), cfg);
     });
 
-    it("service summaries are shared across the project and shown in context", () => {
-      fx = createMulti(backend);
+    it("service summaries are shared across the project and shown in context", async () => {
+      fx = await createMulti(backend);
       const core = fx.ws("core");
       const product = fx.ws("product");
       sync(core);
@@ -155,8 +156,8 @@ for (const backend of ["git", "folder"] as const) {
       expect(ctx).toContain("This service has no summary yet");
     });
 
-    it("project view merges every service with cross-service edges", () => {
-      fx = createMulti(backend);
+    it("project view merges every service with cross-service edges", async () => {
+      fx = await createMulti(backend);
       const core = fx.ws("core");
       const product = fx.ws("product");
       sync(core);
@@ -171,8 +172,8 @@ for (const backend of ["git", "folder"] as const) {
 }
 
 describe("project/repo registration rules", () => {
-  it("all repos of a project must use the same store, and repo names are unique", () => {
-    const fx = createMulti("folder");
+  it("all repos of a project must use the same store, and repo names are unique", async () => {
+    const fx = await createMulti("folder");
     const other = join(fx.root, "billing");
     execFileSync("git", ["init", "-q", "-b", "main", other]);
     sh(other, "remote", "add", "origin", "https://github.com/abc/billing.git");
@@ -183,8 +184,8 @@ describe("project/repo registration rules", () => {
     expect(res.entry.repos.map((r) => r.name).sort()).toEqual(["billing", "core", "product"]);
   });
 
-  it("a second developer gets the repo names the team's store already uses", () => {
-    const fx = createMulti("git");
+  it("a second developer gets the repo names the team's store already uses", async () => {
+    const fx = await createMulti("git");
     expect(fx.ws("core").store.readConfig("codekit.yaml")).toMatch(/repos:\s*\n\s+core:\s*\n\s+remote:/);
     // Developer B: own ~/.codekit and own clone, no --repo-name.
     process.env.CODEKIT_HOME = join(fx.root, "home-b");

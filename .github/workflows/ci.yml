@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Hosted runners: Linux with every supported Node, plus Windows and macOS.
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: 20 }
+          - { os: ubuntu-latest, node: 22 }
+          - { os: ubuntu-latest, node: 24 }
+          - { os: windows-latest, node: 24 }
+          - { os: macos-latest, node: 22 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - run: git --version
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      # github-actions reporter: failures become annotations (readable without log access)
+      - name: Tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npx vitest run --reporter=default --reporter=github-actions 2>&1 | tee vitest.log
+      - name: CLI smoke test
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -o pipefail
+          bash test/smoke/cli-smoke.sh 2>&1 | tee smoke.log
+      # Job logs need admin rights; the tail of a failed step as an annotation is public.
+      - name: Report failure output
+        if: failure()
+        shell: bash
+        run: |
+          for f in vitest.log smoke.log; do
+            [ -f "$f" ] || continue
+            msg=$(tail -n 60 "$f" | sed 's/\x1b\[[0-9;]*m//g' | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(d.replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A")))')
+            echo "::error title=${f} (last 60 lines)::${msg}"
+          done
+
+  # Stock Ubuntu images with the distribution's own git and python (22.04 ships git 2.34).
+  ubuntu-stock:
+    name: stock ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:22.04", "ubuntu:24.04"]
+    steps:
+      - name: Install distribution packages
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git python3 ca-certificates curl xz-utils >/dev/null
+          git --version
+          python3 --version
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: git config --global --add safe.directory '*'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - name: CLI smoke test
+        run: bash test/smoke/cli-smoke.sh
+      - name: Python logging sample (system python)
+        working-directory: logging/python
+        run: python3 -m unittest -v test_codekit_logging.py
+      - name: Node logging sample (pino)
+        run: |
+          d="$(mktemp -d)"
+          cp -r logging/node/src logging/node/test "$d/"
+          cd "$d"
+          echo '{"name":"t","type":"module","private":true}' > package.json
+          npm i -q --no-audit --no-fund pino@9
+          node --experimental-strip-types --test test/logging.test.ts
