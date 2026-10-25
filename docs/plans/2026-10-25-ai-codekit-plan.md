@@ -1,5 +1,7 @@
 # Plan: AI Code Kit — AI-integrated source code management (fully separated from the source repo)
 
+*Last revised after milestone 1, milestone 2, logging adoption and multi-repo support were merged to `main` (PRs #1–#4). Section 7 records what is done and what comes next.*
+
 ## 1. Context
 The team needs a kit that helps AI tools (Claude Code, Cursor, GitHub Copilot) and developers understand a codebase quickly and consistently:
 1. A codebase **map** shared between team members.
@@ -7,11 +9,13 @@ The team needs a kit that helps AI tools (Claude Code, Cursor, GitHub Copilot) a
 3. **Each branch has its own map**, with a record of which branch it was checked out from; merging code also merges the map.
 4. Coding and code exploration use **Superpowers** for planning.
 5. A **naming convention** file that users can add to and edit.
-6. **Readable logs** with mandatory `correlationId` + `tags`.
+6. **Readable logs** with mandatory `correlationId` + `tags`, easy to debug without over-logging.
 
 **Agreed constraints:**
 - **The source repo contains no AI files at all** (map, AGENTS.md/CLAUDE.md, Cursor/Copilot rules, conventions, plans, hooks, CI). Everything lives in an **internal knowledge store** plus **user-level** configuration. The only exception: logger code (correlationId) is application code, so it lives in the source.
+- **Source repos are read + local-commit only for AI agents: never push** (strict; see 4.7).
 - The knowledge store supports **2 backends**: a **separate Git repo** or an **internal shared folder** (NAS / network drive).
+- **One store per project**, shared by all of its repos (microservices such as ABC: `core`, `product`, …).
 - Stacks: Node/TS, Java/Spring, .NET, Python · Source host: GitHub · AI tools: Claude Code + Cursor + Copilot.
 
 **Why Understand-Anything is not the primary map:** it must be run proactively up front, spends LLM tokens on every file, outputs one large JSON graph inside the repo, and has no per-branch merge mechanism.
@@ -19,16 +23,18 @@ The team needs a kit that helps AI tools (Claude Code, Cursor, GitHub Copilot) a
 ## 2. Overall architecture
 
 ```
-┌──────────── Developer machine ───────────────────────────────────┐
-│  Source repo (clean, no AI files)       ~/.codekit/              │
-│     │  current git branch                 ├─ config.yaml (project │
-│     ▼                                     │   ↔ store mapping)    │
-│  Claude Code ─┐                           └─ cache/<project>/     │
-│  Cursor ──────┼──► codemap-mcp (MCP) ──► Storage adapter          │
-│  Copilot ─────┘    + Serena MCP (LSP)       │            │        │
-│  (user-level config)                        ▼            ▼        │
-└──────────────────────────────────── Git backend   Folder backend ─┘
-                                     <project>-codemap   \\NAS\codemap\<project>
+┌──────────── Developer machine ────────────────────────────────────────┐
+│  Source repos (clean, no AI files)        ~/.codekit/                 │
+│  one repo, or a parent folder:            ├─ config.yaml  (project →  │
+│  Transfer/{Transactions,Core,Abs,Admin}   │   store + repos + clones) │
+│     │  current branch per repo            └─ cache/<project>/<repo>/  │
+│     ▼                                                                  │
+│  Claude Code ─┐                                                        │
+│  Cursor ──────┼──► codemap-mcp (MCP) ──► StorageAdapter (scoped per repo)
+│  Copilot ─────┘    + Serena MCP (LSP)        │                │       │
+│  (user-level config, push guard hooks)       ▼                ▼       │
+└────────────────────────────────────── Git backend      Folder backend ┘
+                                       <project>-codemap   \\NAS\codemap\<project>
 ```
 
 ### 2.1 Two-layer map
@@ -40,260 +46,259 @@ The team needs a kit that helps AI tools (Claude Code, Cursor, GitHub Copilot) a
 | Stored where | local cache (`.serena/` excluded via `.git/info/exclude`, never committed) | knowledge store (separate git repo / shared folder) |
 
 ### 2.2 `codemap-mcp` — the single access point for all 3 AI tools
-The AI **never reads/writes the knowledge store directly**; every operation goes through the MCP server → identical behavior across Claude/Cursor/Copilot, identical logic across both backends, and the server computes hash/branch/author itself.
+The AI **never reads/writes the knowledge store directly**; every operation goes through the MCP server, so behavior is the same across Claude/Cursor/Copilot and both backends. The server computes hash, branch and author itself. Every tool also accepts `repoPath` and `repo` (to pick a repo when the workspace is a parent folder).
 
 | Tool | Purpose |
 |---|---|
-| `codemap_context()` | Detect project + branch, sync the map branch, return AI rules, naming/logging conventions, coverage |
-| `codemap_lookup(paths[])` | Return maps for the given files + `missing`/`stale` flags |
-| `codemap_write(path, body, dependsOn, tags)` | Write a map; the server fills in `sourceHash`, `updatedAt`, `updatedBy`, `branch` |
-| `codemap_search(query)` | Search the index by tag/keyword/dependency |
-| `plan_save(name, content)` / `plan_list()` | Save/read Superpowers plans per branch |
-| `naming_list()` / `naming_add_rule(...)` / `naming_edit_rule(id, ...)` | Manage the naming convention |
-| `logging_convention()` / `logging_add_tag(tag, desc)` | Logging standard + tag registry |
+| `codemap_context()` | Detect project/repo/branch (or a parent folder), sync map branches, return AI rules, conventions, coverage and every service's summary |
+| `codemap_lookup(paths[])` | Maps + status (`ok`/`missing`/`stale`/`excluded`/`not-found`/`remote`). Paths may be repo-relative, absolute, parent-relative (`Core/src/x.ts`) or another service (`core:src/x.ts`) |
+| `codemap_write(path, body, dependsOn, tags)` | Write a map; `dependsOn` may reference other services as `<repo>:<path>` |
+| `codemap_search(query, scope)` | Search by tag/path/dependency/text in this repo or the whole project |
+| `service_write(body)` / `service_list()` | Per-repo service summary (Purpose, Exposes, Consumes, Data owned, Notes) shown to every agent of the project |
+| `plan_save(name, content)` / `plan_list(name?)` | Save/read plans per repo + branch |
+| `naming_list` / `naming_add_rule` / `naming_edit_rule` | Naming convention |
+| `logging_convention` / `logging_add_tag` | Logging standard + tag registry |
+| `logging_detect` | Read-only scan for the project's existing logging (library, in-house logger, raw calls) → adoption strategy |
+| `logging_sample(stack, library?)` | Reference implementation + adoption guide for an existing library or in-house logger |
+| `logging_set_project(library, entryPoint, notes)` | Record the project's logger entry point in the convention |
 
-The MCP server also returns `instructions` on initialization (lookup order, workflow) so Cursor/Copilot receive the rules without any file in the repo.
+The MCP server also returns `instructions` on initialization (lookup order, workflow, never push), so Cursor/Copilot get the rules without any file in the repo.
 
 ### 2.3 Leave no trace in the source repo
-- AI configuration is installed at **user level**: Claude plugin (user scope), `~/.cursor/mcp.json` + Cursor User Rules, VS Code user `mcp` + user instructions for Copilot.
-- Every hook/plugin **activates only when the current repo's remote matches a project registered** in `~/.codekit/config.yaml`; any other repo → no-op.
-- Locally generated files (`.serena/`, …) → added to `.git/info/exclude` (never committed, `.gitignore` untouched).
-- No mandatory git hooks: branches/merges are **detected lazily** (section 4.3). Git hooks are optional, installed into `.git/hooks/` chaining any existing hook; skipped if the repo uses `core.hooksPath` (husky).
+- AI configuration is installed at **user level**: Claude plugin (user scope), `~/.cursor/mcp.json` + `~/.cursor/hooks.json` + Cursor User Rules, VS Code user `mcp.json` + user instructions for Copilot (`codekit setup-tools`).
+- Every hook/tool **activates only for repos registered** in `~/.codekit/config.yaml`; any other folder → no-op.
+- Local tool caches (`.serena/`, `.ua/`) → `.git/info/exclude`; the only file written into `.git/` is the local `pre-push` guard (4.7). Nothing is committed.
+- Branches/merges are **detected lazily** (4.3); no git hooks are needed for maps.
 
-## 3. Knowledge store (same logical structure for both backends)
+## 3. Knowledge store — one per project
 
 ### 3.1 Git backend — internal repo `<project>-codemap`
 ```
-branch _config                 # shared data, NOT branched per source branch
-├── codekit.yaml               # source remote, stacks, exclude, enforce, merge-detection method
-├── rules/AGENTS.md            # rules for AI
+branch _config                         # shared by every repo of the project
+├── codekit.yaml                       # settings, repos (name → remote) and per-repo overrides
+├── rules/AGENTS.md                    # rules for AI
 ├── conventions/naming.md
-├── conventions/logging.md     # standard + tag registry
-└── .github/workflows/report.yml   # periodic coverage report (CI of the internal repo)
+├── conventions/logging.md             # standard, project logger, tag registry
+└── .github/workflows/codemap-report.yml   # coverage report, matrix over the project's repos
 
-branch map/<source-branch>     # mirrors each source branch (e.g. map/main, map/feature__login-otp)
-├── modules/**.md              # semantic map
-├── lineage/<branch>.json      # checkout/sync/merge history
-└── plans/YYYY-MM-DD-<name>.md # Superpowers plans for the branch
+branch maps/<repo>/<branch>            # one per source repo + branch (e.g. maps/core/main, maps/product/feature__x)
+├── modules/**.md                      # semantic map
+├── lineage/<branch>.json              # checkout/sync/merge history
+├── plans/YYYY-MM-DD-<name>.md         # plans for the branch
+└── service.md                         # service summary of the repo
 ```
-- Each map branch is a **git worktree** in `~/.codekit/cache/<project>/wt/<branch>` → work on several branches in parallel without switching.
-- Copy on checkout = `git worktree add -b map/<b> ... map/<parent>`; merge = a real `git merge` → history, review, revert.
-- Branch name normalization: `feature/login-otp` → `feature__login-otp` (avoids the `map/feature` vs `map/feature/x` ref conflict).
+- Each map branch is a **git worktree** in `~/.codekit/stores/<project>/wt/<repo>/<branch>`, so several branches and repos can be worked on in parallel.
+- Copy on checkout = new branch from `maps/<repo>/<parent>`; merge = a real `git merge` (with the resolved tree) → history, review, revert.
+- Every write is committed and pushed **to the store** immediately (`pull --rebase` + retry on conflict), so tools without a Stop hook never hold unpushed maps.
+- Branch name normalization: `feature/login-otp` → `feature__login-otp`. Archived branches become tags `archive/maps/<repo>/<branch>`.
 
 ### 3.2 Folder backend — `\\NAS\codemap\<project>\`
 ```
-config/  (codekit.yaml, rules/, conventions/)
-branches/<branch>/
+config/                                # codekit.yaml, rules/, conventions/
+repos/<repo>/branches/<branch>/
 ├── modules/**.md
-├── lineage.json
+├── lineage/<branch>.json
 ├── plans/
-└── .base-manifest.json        # hash of every map file at fork time (for 3-way merge)
-history/YYYY-MM.jsonl          # append-only log: who wrote what, when, on which branch
-locks/                         # TTL locks for merge/sync operations
+├── service.md
+└── .base-manifest.json                # hash of every map file at fork/last sync (3-way merge base)
+repos/<repo>/archive/                  # archived branches
+history/YYYY-MM.jsonl                  # append-only log: who wrote what, when, repo + branch
+locks/                                 # TTL locks for merges
 ```
-- **Atomic** writes (write temp → rename) + append to `history`; maps are per file, so two people rarely write the same file.
-- 3-way merge needs no base content, only `.base-manifest.json` (section 4.3).
-- Backups rely on the NAS backup mechanism (documented in the operations guide).
+- **Atomic** writes (temp → rename) + `history`; maps are per file, so two people rarely write the same file. Recommended for small teams; git backend for teams > 5.
+- Backups rely on the NAS backup mechanism.
 
 ### 3.3 Map file format
-`modules/src/auth/login.service.ts.md` (mirrors the source path, 1 source file = 1 map file; optional `_dir.md` folder summaries):
+`modules/src/auth/login.service.ts.md` (mirrors the source path, 1 source file = 1 map file):
 ```yaml
 path: src/auth/login.service.ts
 sourceHash: 9f2c1a7e3b41        # sha256 of LF-normalized content, 12 chars
 updatedAt: 2026-10-25T09:12:03Z
 updatedBy: dev-a (claude-code)
 branch: feature/login-otp
-dependsOn: [src/auth/token.ts, src/db/user.repo.ts]
+dependsOn: [src/auth/token.ts, core:src/api/user.ts]
 tags: [auth]
 stale: false
 ```
 Body: `## Purpose` · `## Public API` · `## Main flow` · `## Caveats` (limit ~60 lines).
-`index.json` (entry list + `dependsOn` graph + coverage) is **not stored in the knowledge store**; it is generated in `~/.codekit/cache/` (reads frontmatter only, < 1s).
+`index.json` (entries + `dependsOn` graph + coverage) is **not stored**; it is generated in `~/.codekit/cache/` (frontmatter only, < 1 s).
 
 ### 3.4 Multi-repo projects (microservices)
-A project such as **ABC** with many repos (`core`, `product`, …) has **one** knowledge store:
-
 | | Shared by all repos | Per repo |
 |---|---|---|
-| Git backend | branch `_config` (codekit.yaml, rules, conventions, report workflow) | branches `maps/<repo>/<branch>` (worktrees `wt/<repo>/<branch>`) |
-| Folder backend | `config/` | `repos/<repo>/branches/<branch>/` |
-| Content | rules, naming and logging conventions, tag registry, per-repo overrides (`repos:` in codekit.yaml) | maps (`modules/`), lineage, plans, `service.md` |
+| Content | rules, naming and logging conventions, tag registry, `repos:` (name → remote, overrides) | maps, lineage, plans, `service.md` |
 
-- **Repo names are decided by the store.** The first `codekit init --project ABC --repo-name core` records `core → remote` in codekit.yaml. Later developers get the same name automatically, and a conflicting name is rejected. This keeps everyone's maps in the same place.
-- **Branches are per repo.** `feature/x` in `product` does not touch `core`. A repo's first map branch is rooted at its default branch.
-- **Cross-service lookups:** `codemap_lookup("core:src/api/user.ts")` reads core's map. It uses the branch with the same name if there is one, otherwise core's default branch. When core is cloned on this machine (its `localPath` is known), freshness is checked against that clone; otherwise the status is `remote`.
-- `dependsOn` may reference other services as `<repo>:<path>`. `codemap_search` with `scope: project` and `codemap view --project` cover every repo, cross-service edges included.
-- **Service summaries:** each repo has a `service.md` (Purpose, Exposes, Consumes, Data owned, Notes), written with `service_write`. Every repo's session context includes the summaries of all services, so an agent working on `product` knows what `core` offers.
-- **Reports:** the store's report workflow runs a matrix over `SOURCE_REPOSITORIES`.
-- The push guard applies per repo, unchanged. Each repo is edited and committed locally, and the developer pushes.
+- **The store decides repo names.** The first `codekit init --project ABC --repo-name core` records `core → remote` in codekit.yaml. Later developers get the same name automatically, and a conflicting name is rejected.
+- **Branches are per repo.** A repo's first map branch is rooted at its default branch, even when the developer starts on a feature branch.
+- **Cross-service lookups:** `codemap_lookup("core:src/api/user.ts")` reads core's map. It uses the branch with the same name if it exists, otherwise core's default branch. Freshness is checked against core's clone when its path is known on this machine; otherwise the status is `remote`.
+- **Service summaries** of every repo are part of each session's context. `codemap_search` (`scope: project`) and `codemap view --project` cover every repo, cross-service edges included.
+- **Per-repo overrides** in codekit.yaml: `defaultBranch`, `include`, `exclude` (added to the project list), `description`.
 
-**Parent folder / multi-root workspace.** Developers often open the whole system, for example `Transfer/` holding the `Transactions`, `Core`, `Abs` and `Admin` repos, or a VS Code multi-root workspace of those repos. codekit resolves such a folder to all the registered repos inside it. It uses the clone paths recorded by `codekit init` and only falls back to a shallow scan for older configs, so hooks stay fast in large unrelated folders.
-- **SessionStart:** one context listing every repo (folder → repo, branch, coverage), then each project's services, rules and conventions, once per project.
-- **PostToolUse / Stop:** a touched file is tracked under the repo that owns it, found from the file's own folder. Stop lists the pending maps as `<repo>:<path>`.
-- **MCP:** paths may be relative to the parent (`Core/src/x.ts`), absolute, or `<repo>:<path>`. Tools without a path (`plan_save`, `service_write`, `logging_detect`) require `repo` when more than one repo is present. Search defaults to project scope. Multi-root clients are supported through MCP roots.
-- **Push guard:** from a parent folder every push-like command is denied, using the git aliases of all the repos inside, because the shell could be in any of them.
-- **CLI:** `codekit init --all -C Transfer --project Transfer` registers every sub-repo, named after its folder unless the store already knows the repo. `codemap status` and `codemap sync` run for every repo; other commands ask for `-C <repo>`.
+### 3.5 Parent folder / multi-root workspace
+Developers often open the whole system: `Transfer/` holding the `Transactions`, `Core`, `Abs` and `Admin` repos, or a VS Code multi-root workspace of those repos. codekit resolves such a folder to every registered repo inside it. It uses the clone paths recorded by `codekit init`, and only falls back to a shallow scan for older configs, so hooks stay fast in large unrelated folders.
+- **SessionStart:** one context listing every repo (folder → repo, branch, coverage), then the project's services, rules and conventions, once per project.
+- **PostToolUse / Stop:** a file is tracked under the repo that owns it. Stop lists pending maps as `<repo>:<path>`.
+- **MCP:** paths may be relative to the parent (`Core/src/x.ts`), absolute, or `<repo>:<path>`. Tools without a path take `repo`. Search defaults to project scope.
+- **Push guard:** from a parent folder every push-like command is denied.
+- **CLI:** `codekit init --all -C Transfer --project Transfer` registers every sub-repo (named after its folder unless the store already knows it). `codemap status` / `sync` run for every repo.
 
 ## 4. Feature details
 
 ### 4.1 Shared map (requirement 1)
-- All members point at the same knowledge store → same map; access is managed by internal repo permissions / NAS folder permissions.
-- Viewer: `codemap view` generates a static HTML page (search + dependency graph) from the index — later phase.
-- Understand-Anything: optionally run `/understand <folder>` for a dashboard; its `.ua/` output is added to `.git/info/exclude`.
+- All members point at the same knowledge store → same map; access via internal repo permissions / NAS folder permissions.
+- `codemap view [--project]` generates a static HTML viewer (search, map detail, dependency graph) in `~/.codekit/cache`.
+- Understand-Anything remains optional (`/understand <folder>`; `.ua/` is excluded locally).
 
 ### 4.2 AI writes maps for unmapped parts (requirement 2)
-**Lookup order (in `rules/AGENTS.md` + MCP instructions):** `codemap_context` → `codemap_lookup` → Serena symbol tools → only then read source. After reading deeply / editing a `missing`/`stale` file → `codemap_write`.
+**Lookup order** (in `rules/AGENTS.md` + MCP instructions): `codemap_context` → `codemap_lookup` → Serena symbol tools → only then read source. After reading deeply / editing a `missing`/`stale` file → `codemap_write`.
 
-**Claude Code — `codekit` plugin (user scope), fully automated:**
-- `SessionStart` → `codemap sync` + inject rules/conventions/coverage into context (replacing an in-repo CLAUDE.md).
-- `PostToolUse` matcher `Read|Edit|Write|MultiEdit|mcp__serena__.*` → record the path in `~/.codekit/cache/<project>/session/<session_id>.txt`.
-- `Stop` → compare touched files with the map; if missing/stale → `{"decision":"block","reason":"..."}` asking for `codemap_write`; skipped when `stop_hook_active=true`. When complete → commit + `pull --rebase` + push the map branch (git backend) / write history (folder backend).
-- `codemap` skill: uses Serena (`get_symbols_overview`, `find_referencing_symbols`) to write maps instead of reading whole files.
+**Claude Code — `codekit` plugin (user scope):**
+- `SessionStart` → `codemap sync` (+ GitHub PR check) for the repo or every repo of a parent folder, and inject rules/conventions/services/coverage into context.
+- `UserPromptSubmit` → short workflow reminder (map, plan, conventions, never push).
+- `PreToolUse` (`Bash`, `PowerShell`, `mcp__*`) → push guard (4.7).
+- `PostToolUse` (`Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, Serena tools) → record the file in `~/.codekit/cache/<project>/<repo>/session/<session_id>.txt` of the repo that owns it.
+- `Stop` → touched files with missing/stale maps → `{"decision":"block"}` (`enforce: fail`) or a warning (`enforce: warn`); skipped when `stop_hook_active`.
+- Skills: `codemap`, `naming`, `logging`.
 
-**Cursor / Copilot:** receive rules from MCP `instructions` + short User Rules / user instructions ("for registered projects, always call `codemap_context` first"). The spike checks user-level Cursor hooks (`~/.cursor/hooks.json`) to get behavior similar to Claude's `Stop`.
+**Cursor / Copilot:** MCP `instructions` + user rules/instructions (`codekit setup-tools`). Cursor also gets the push guard through user-level hooks. Neither tool has a Stop hook, so map completeness relies on the rules and on the periodic report.
 
 ### 4.3 Per-branch map, checkout history, merge (requirement 3)
-**Lazy detection** — every time the MCP server/hook runs, `codemap sync` reads the source repo's current branch:
+**Lazy detection.** Every SessionStart and the first MCP call per repo and branch runs `codemap sync`:
 
 | Event | Detection | Action |
 |---|---|---|
-| New branch | No map branch yet; parent from reflog (`checkout: moving from main to feature/x`), fallback: branch with the nearest merge-base | Create map branch from parent; `lineage`: `{branch, parent, baseCommit, createdBy, createdAt}` |
-| Sync (main merged into feature) | New merge commit in source whose parent belongs to another branch | Merge parent map → branch map; record `{event:"sync", from, commit, at}` |
-| Merge into target | GitHub API: merged PR (`head`→`base`, squash supported); fallback `git branch -r --merged`; manual fallback `codemap merge <b> --into <t>` | Merge branch map → target map; record `{event:"merge", into, pr, at}` |
-| Source branch deleted after merge | No longer on the remote | Git: tag `archive/map/<b>` then delete the map branch; Folder: move to `archive/` |
-| Wrong parent | — | `codemap lineage set-parent <b> <parent>` |
+| New branch | No map branch yet; parent from the HEAD reflog (`checkout: moving from main to feature/x`), fallback: nearest merge-base | Create from the parent's map; lineage `{branch, parent, baseCommit, createdBy, createdAt}` |
+| Sync (parent merged into branch) | Parent tip is an ancestor of HEAD and newer than the last sync | Merge parent map → branch map; event `sync` |
+| Merge into parent | Branch tip is an ancestor of the parent tip (local or `origin/` refs) | Merge branch map → parent map; event `merge` |
+| Squash / rebase merge | GitHub API, GET only: merged PR `head` → `base` (GitHub Enterprise via `github.apiUrl`), checked at most every `checkIntervalMinutes` | Same as merge, with the PR number |
+| Other cases | — | `codemap merge <b> --into <t> [--pr N]`, `codemap lineage set-parent <b> <p>` |
+| Source branch deleted after merge | No local or `origin/` ref left | Archive the map branch |
 
-**Automatic map conflict resolution (both backends)** — maps are derived from code, so no human merging is needed:
-1. Only one side changed (vs. base: merge-base for git, `.base-manifest.json` for folder) → take the changed side.
-2. Both changed → keep the version whose `sourceHash` matches the source file content on the target after merge.
-3. Neither matches → keep the newer version + set `stale: true` → the AI rewrites it when it next touches the file.
+**Automatic map conflict resolution:**
+1. Only one side changed (vs. the merge-base / base manifest) → take that side.
+2. Both changed → keep the version whose `sourceHash` matches the source after the merge.
+3. Neither matches → keep the newer one and flag it `stale` for the AI to rewrite.
 
-`codemap lineage <branch>` prints the history tree: where it was checked out from, sync events, where it was merged, which PR.
+Lineage files are unioned. Conflicting plans are kept side by side (`<name>.from-<branch>.md`). `codemap lineage <branch>` prints the history tree.
 
 ### 4.4 Superpowers (requirement 4)
-- Install the Superpowers plugin at user level; `codekit init` checks and prompts for installation.
-- Workflow (injected via SessionStart + `rules/AGENTS.md`):
-  - Exploring code: `codemap_context`/`lookup` → `brainstorming`.
-  - New feature: `brainstorming` → `writing-plans` → `executing-plans`/`subagent-driven-development` + `test-driven-development`.
-  - Bug: `systematic-debugging`.
-- **Plans are never written into the source repo**: rules require saving plans via `plan_save` → `plans/` of the current map branch (spike: confirm the default Superpowers `docs/plans` path can be overridden; if not, a `PostToolUse` hook moves the plan file into the store and removes it from the repo).
-- `UserPromptSubmit` injects a short workflow reminder.
-- Cursor/Copilot: a condensed workflow in the MCP instructions (brainstorm → `plan_save` → follow the plan + TDD).
+- Superpowers is installed at user level (`codekit init` prints the commands).
+- Workflow (SessionStart + `rules/AGENTS.md`): explore → `brainstorming`; feature → `brainstorming` → `writing-plans` → `executing-plans`/`subagent-driven-development` + `test-driven-development`; bug → `systematic-debugging`.
+- **Plans are never written into the source repo.** They are saved with `plan_save` into `plans/` of the repo's map branch.
+  - **Open gap:** Superpowers itself writes plans to `docs/plans/` (or `docs/superpowers/`) inside the repo, and today only the rules forbid that.
+  - **Next step (7.2):** deny AI-artifact writes in registered repos through `PreToolUse` and redirect them to `plan_save`.
+- Cursor/Copilot get a condensed workflow in the MCP instructions.
 
 ### 4.5 Naming convention (requirement 5)
-- `conventions/naming.md` lives in the shared area (`_config` / `config/`), not branched: a common section + one section per stack; each rule: `ID | Scope | Rule | Correct | Incorrect | enforcedBy`.
-- Edit the file in the store directly, or ask the AI via `naming_add_rule`/`naming_edit_rule` (checks duplicates/conflicts, assigns a new ID); git backend → each change is a commit (PRs can be required on the internal repo); folder backend → recorded in `history`.
-- Linters (`@typescript-eslint/naming-convention`, Checkstyle, `.editorconfig` IDE1006, ruff `N`) are added to the source **only when the project agrees**; by default the AI checks against the convention when writing/reviewing code.
+- `conventions/naming.md` in the shared config area: a common section + one section per stack; each rule `ID | Scope | Rule | Correct | Incorrect | enforcedBy`.
+- Edited in the store directly or via `naming_add_rule` / `naming_edit_rule` (duplicate check, next `NC-###` ID); git backend → one commit per change.
+- Linters (`@typescript-eslint/naming-convention`, Checkstyle, `.editorconfig` IDE1006, ruff `N`) only when the project agrees; otherwise the AI checks names against the convention.
 
 ### 4.6 Logging (requirement 6)
-**Standard** (`conventions/logging.md` in the store):
-- Required fields: `timestamp, level, service, correlationId, tags[], message`; optional `context{}`, `durationMs`, `error{type,message,stack}`.
-- `tags` come only from the **registry** (e.g. `auth, payment, db, cache, external-api, job`); new tags are added via `logging_add_tag`.
-- `correlationId`: read `X-Correlation-Id` (use `traceId` when OpenTelemetry is present), otherwise generate a UUIDv7 at the entry point (HTTP, consumer, cron); return it in a response header; propagate it to every outgoing HTTP call/message.
-- Prod: single-line JSON. Dev: `09:12:03.120 INFO  [cid=7f3a91c2] [auth,login] Login success userId=42 (12ms)`.
-- Wrapper API with mandatory tags: `log.info(tags, message, context?)`.
+**Standard** (`conventions/logging.md`):
+- **Fields:** `timestamp, level, service, logger, correlationId, tags[], message`, plus optional `context{}`, `durationMs`, `error{type,message,stack}`.
+- **Levels:** `debug` is off in production.
+- **What to log / what not to log:**
+  - one line per request or job
+  - one `error` per failure, carrying the ids needed to reproduce it
+  - no logging in loops, no log-and-rethrow, no payloads, no secrets
+- **correlationId:** taken from `X-Correlation-Id`, else the OpenTelemetry trace id, else a new UUIDv7. It is returned in the response and propagated on outgoing calls.
+- **Output:** production writes single-line JSON. Development writes `09:12:03.120 INFO  [cid=7f3a91c2] [auth,login] Login success userId=42 (12ms)`.
 
-**Sample code in the kit** (`logging/<stack>/`) — the AI **generates it into the source following the project's naming convention** (the code belongs to the project, no dependency on an internal package):
-| Stack | Logger | correlationId propagation |
-|---|---|---|
-| Node/TS | pino (+ pino-pretty in dev) | AsyncLocalStorage + Express/Nest middleware |
-| Java/Spring | SLF4J + Logback + logstash-logback-encoder | MDC + `OncePerRequestFilter`, RestTemplate/WebClient interceptor |
-| .NET | Serilog | `LogContext` + ASP.NET Core middleware, `DelegatingHandler` |
-| Python | standard library `logging` (no new dependency) | contextvars + ASGI (FastAPI/Starlette) and Django middleware |
-- `logging` skill/rule: new code must use the wrapper, tags from the registry, and log at boundaries (request in/out, external calls, errors).
-- Lint rules banning raw loggers (ESLint `no-console`, ArchUnit, BannedApiAnalyzers, ruff `TID251`): optional, when the project agrees.
-- `codemap`/`codemap-mcp` themselves log to this standard in `~/.codekit/logs/` (`tags: [codemap, mcp|hook|sync]`).
+**Reference implementations** (`logging/<stack>/`, served by `logging_sample`). The AI adapts them into the source using the project's naming:
 
-**Projects that already log** (library or their own logger code): never add a second logger. `logging_detect` scans the repo read-only and returns the strategy:
-- `in-house`: extend the project's logger. Add tags with a `legacy` default for old calls, read the correlationId from context, change the output.
-- `library`: keep the library. Configure its formatter and context, and add a thin tagged wrapper.
-- `reference-sample`: the project has no logging yet. Adapt the reference sample.
+| Stack | Logger | correlationId propagation | Verified |
+|---|---|---|---|
+| Node/TS | pino | AsyncLocalStorage + middleware, `fetch`/axios | tests run |
+| Python | standard library `logging` | contextvars + ASGI/Django middleware, requests/httpx | tests run |
+| Java/Spring | SLF4J + Logback + logstash-logback-encoder | MDC + filter, RestTemplate/RestClient/WebClient | not compiled |
+| .NET | Serilog | LogContext + middleware, `DelegatingHandler` | not compiled |
 
-Adoption guides live in `logging/adapters/`: log4j2, NLog, Microsoft.Extensions.Logging, winston, bunyan, loguru, structlog, and in-house loggers. `logging_set_project` records the entry point in the convention.
-
-**Debuggable without over-logging.** The convention defines the levels (`debug` is off in production) and a "what to log" / "what not to log" list:
-- one line per request or job
-- one `error` per failure, carrying the ids needed to reproduce it
-- no logging in loops, no log-and-rethrow, no payloads, no secrets
-
-The wrapper enforces it in code:
-- a `logger` field on every line
-- redaction and size limits on `context`
-- the `cause` chain in `error.stack`
-- repeated errors collapsed to one line per 60 s
-- a single request line, raised to `warn` when the request is slow
-
-`codekit logs` reads any stack's JSON logs. It filters by correlationId (including the short id printed in pretty lines), tag, level, logger, text and time. `--trace` shows the timeline of one request, and `--stats` prints a noise report with over-logging hints.
+- The wrapper enforces the rules in code: a `logger` field on every line, redaction and size limits on `context`, the cause chain in `error.stack`, repeated errors collapsed (1 per 60 s), one request line (`warn` when slow). Node and Python implement all of these; Java and .NET implement the request line only.
+- **Projects that already log** (a library or their own logger) never get a second logger. `logging_detect` returns `in-house` / `library` / `reference-sample`. The adoption guides in `logging/adapters/` cover in-house loggers, log4j2, NLog, Microsoft.Extensions.Logging, winston, bunyan, loguru and structlog. Old calls default to tag `legacy`. `logging_set_project` records the entry point.
+- **`codekit logs`** reads JSON logs from any stack. It filters by correlationId (also the short id), tag, level, logger, text and time. `--trace <cid>` shows one request's timeline, and `--stats` prints a noise report with over-logging hints.
 
 ### 4.7 Push guard — source repos are read + local-commit only (strict)
-AI agents may read, edit and commit **locally** in a registered source repo, but must **never** push or write to its remote. The developer reviews and pushes. Three independent layers enforce this:
-
 | Layer | Covers | Mechanism |
 |---|---|---|
-| 1. Agent hooks | Claude Code (`PreToolUse` on `Bash`/`PowerShell`/`mcp__*`), Cursor (`beforeShellExecution`, `beforeMCPExecution` via `codekit setup-tools`) | Command analysis that denies `git push`/`send-pack`/`subtree push`/`lfs push`, push aliases (also existing repo aliases), `-C`/`cd` into the repo from elsewhere, nested shells (`bash -c`, `pwsh -Command`, `cmd /c`, `eval`, `$(…)`), encoded commands, `gh pr create/merge/…`, `gh api` writes, `curl`/`Invoke-RestMethod` writes to code-host APIs, and code-host MCP write tools. Fails closed on errors. |
-| 2. `pre-push` git hook | every tool that sets an agent marker (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `AI_AGENT`, `CURSOR_AGENT`, `CODEKIT_AGENT`) | Installed locally into `.git/hooks` by `codekit init` (never committed). It chains an existing hook and does not affect pushes from the developer's own terminal. Skipped when the repo uses `core.hooksPath` (husky); `doctor` reports it. |
-| 3. Kit code | `codemap`, `codemap-mcp`, hooks | `SourceRepo` runs only an allow-list of read-only git commands (`rev-parse`, `show`, `cat-file`, `ls-tree`, `log`, `config --get`, …) and throws on anything else. The GitHub integration sends GET requests only. |
+| 1. Agent hooks | Claude Code `PreToolUse`, Cursor `beforeShellExecution` / `beforeMCPExecution` | Denies `git push` in any form: aliases (including existing repo aliases), `-C` or `cd` into the repo, nested shells, `eval`, `$(…)`, encoded commands, and scripts run through a shell. Also denies `gh pr create/merge/…`, `gh api` writes, `curl`/`Invoke-RestMethod` writes to code hosts, and code-host MCP write tools. From a parent folder every push-like command is denied. Fails closed. |
+| 2. `pre-push` git hook | any process with an agent marker (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `AI_AGENT`, `CURSOR_AGENT`, `CODEKIT_AGENT`) | Installed by `codekit init` into `.git/hooks`. Chains an existing hook. Not installed when `core.hooksPath` is set (`doctor` reports it). |
+| 3. Kit code | codemap, codemap-mcp, hooks | `SourceRepo` runs an allow-list of read-only git commands. GitHub calls are GET only. |
 
-- The guard cannot be disabled in `codekit.yaml`. Only individual MCP tools can be allow-listed (`guard.allowMcpTools`, e.g. issue comments).
-- Copilot (VS Code) has no hook API, so `setup-tools` prints a `chat.tools.terminal.autoApprove` snippet that makes `git push` / `gh pr` always require manual approval. The rules forbid pushing, and layer 2 applies when an agent marker is present.
+The guard cannot be disabled; only individual MCP tools can be allow-listed (`guard.allowMcpTools`). Copilot has no hook API: `setup-tools` prints a `chat.tools.terminal.autoApprove` snippet that forces manual approval of pushes.
 
 ## 5. Kit repository — `codekit-y`
 ```
 codekit-y/
-├── src/core/             # TS: storage adapters (git | folder), map model, hash, index, sync/merge, lineage, hooks, logger
-├── src/cli/              # codekit init|project create|mcp-config|doctor ; codemap status|lookup|sync|merge|lineage|search|hook
-├── src/mcp/              # codemap-mcp (stdio)
-├── plugins/codekit/      # Claude plugin: hooks, skills (codemap, naming, logging), bundled MCP
-├── .claude-plugin/       # marketplace.json (the kit repo is a local Claude plugin marketplace)
-├── templates/store/      # knowledge store skeleton: codekit.yaml, rules/AGENTS.md, conventions/*
-├── logging/{node,java,dotnet,python}/   # (milestone 2)
-├── fixtures/{node,java,dotnet,python}-sample/   # (milestone 2)
-└── docs/
+├── src/core/        storage (git | folder, scoped per repo), map model, hash, index, sync/merge, lineage,
+│                    hooks, push guard, parent-folder resolution, GitHub, report, view, logging detection, log viewer
+├── src/cli/         codekit: project create · init [--all] · setup-tools · mcp-config · logs · projects · doctor
+│                    codemap: status · lookup · sync · index · search · merge · report · view · lineage · hook
+├── src/mcp/         codemap-mcp (stdio)
+├── plugins/codekit/ Claude plugin: hooks (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop), skills, bundled MCP
+├── .claude-plugin/  marketplace.json (the kit repo is a local plugin marketplace)
+├── templates/store/ knowledge store skeleton: codekit.yaml, rules/AGENTS.md, conventions/*, report workflow
+├── logging/         reference implementations (node, python, java, dotnet) + adapters/ guides
+├── test/            unit, storage contract (both backends), e2e, guard, GitHub, report, logging, multi-repo, parent folder
+└── docs/plans/      this plan
 ```
-- Written in Node/TS as a single package (Node 20+ on developer machines; Serena needs `uv`). The plugin is named `codekit` (plugin names starting with `claude-` are rejected by the plugin validator). Hooks and the bundled MCP server run `node <kit>/dist/...`, so the kit is used from a local clone via a local marketplace.
-- `StorageAdapter` interface: `refresh, readConfig, writeConfig, listBranches, hasBranch, createBranch, archiveBranch, read, write, list, baseSnapshot, commitMerge` — 2 implementations, `GitStorage` and `FolderStorage`.
-- `codekit project create <name> --backend git|folder` → scaffold a knowledge store from the template.
-- `codekit init` (per developer, once per project): register remote ↔ store in `~/.codekit/config.yaml`, clone the store, add `.git/info/exclude` entries, print plugin/MCP setup steps.
-- `codekit doctor`: verify the setup (kit built, Serena's `uv`, store reachable, branch map).
+- Node/TS single package (Node 20+ on developer machines; Serena needs `uv`). The plugin is used from a local clone through a local marketplace (`node <kit>/dist/...`).
+- `StorageAdapter`: `forRepo`, `listRepos`, `refresh`, `readConfig`/`writeConfig`, `listBranches`, `hasBranch`, `createBranch`, `archiveBranch`, `read`/`write`/`list`, `baseSnapshot`, `commitMerge`, `localPath`.
 
-## 6. Reporting & enforcement (no CI in the source repo)
-*Implemented in milestone 2:* `codemap report` (per-branch coverage from committed source, one `git cat-file --batch` per branch) with the `codemap-report.yml` workflow template for the store repo (read-only source token, `persist-credentials: false`), and `codemap view` (static HTML: search, map detail, dependency graph).
+## 6. Reporting & enforcement
+- **Claude Code:** hard block via the Stop hook. **Cursor:** push guard via hooks; maps via rules. **Copilot:** rules + manual approval of pushes.
+- **`codemap report`:** coverage and missing/stale maps per branch from committed source. The store repo's `codemap-report.yml` runs it on a schedule as a matrix over `SOURCE_REPOSITORIES`, with a read-only source token and `persist-credentials: false`. Folder backend: a scheduled job on an internal machine.
 
-- **Claude Code**: hard block via the `Stop` hook.
-- **Cursor**: user-level hooks if the spike confirms them; otherwise soft (rules + MCP).
-- **Copilot**: soft (rules + MCP).
-- **Periodic report** `codemap report`: coverage, `missing`/`stale` files on active branches — runs as GitHub Actions in the internal repo (git backend, needs a token to read the source repo) or a scheduled job on an internal machine (folder backend); publishes a summary/issue.
+## 7. Status and next steps
 
-## 7. Roadmap (2 developers)
-| Phase | Scope | Duration |
-|---|---|---|
-| 0. Spike | Serena on 4 stacks; Claude hook payloads; Superpowers plan-path override; Cursor user hooks; Copilot user instructions; GitHub API squash-merge detection | 4 days |
-| 1. Core | Map model, hash, index, `StorageAdapter` + `GitStorage` | 1.5 weeks |
-| 2. MCP + Claude plugin | `codemap-mcp`, SessionStart/PostToolUse/Stop/UserPromptSubmit hooks, skills | 1.5 weeks |
-| 3. Branch & merge | lazy sync, lineage, automatic merge, archiving, GitHub API | 1 week |
-| 4. Folder backend | `FolderStorage`, base manifest, atomic writes, locks, history | 1 week |
-| 5. Conventions & logging | `rules/` templates, `naming.md`, `logging.md`, sample code for 4 stacks (split between 2 devs) | 1.5 weeks |
-| 6. Installer & integration | `codekit init/doctor`, user-level Cursor/Copilot config, `report` | 1 week |
-| 7. Pilot | 1 real repo × 2–3 people (one group on git backend, one on folder backend) | 2 weeks |
-| | **Total** | **~10 weeks** |
+### 7.1 Done (merged to `main`)
+| PR | Scope |
+|---|---|
+| #1 Milestone 1 | Core (map model, hash, index), git + folder backends, lazy branch/sync/merge detection, automatic conflict resolution, lineage, CLI, MCP server, Claude plugin (hooks + skills), store templates |
+| #2 Milestone 2 | Push guard (3 layers), GitHub API squash-merge detection, `report` + CI template, `view`, `setup-tools` (Cursor/VS Code), logging reference implementations for 4 stacks |
+| #3 Logging adoption | `logging_detect`, adapter guides for 8 libraries/in-house loggers, `logging_set_project`, debug/noise rules in the wrappers, `codekit logs` (`--trace`, `--stats`) |
+| #4 Multi-repo | One store per project, per-repo maps/branches, store-owned repo names, cross-service lookups, service summaries, project view/search, parent-folder and multi-root workspaces, `init --all` |
+
+187 automated tests run for both backends. Smoke tests ran the real CLI and the MCP server over stdio on a single repo, on a two-service project, and on a parent folder.
+
+### 7.2 Next steps (in order)
+| # | Step | Why | Size |
+|---|---|---|---|
+| 1 | **Block AI artifacts in source repos**: `PreToolUse` denies `Write`/`Edit` to `docs/plans/**`, `docs/superpowers/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**`, `.cursor/**`, `.github/copilot-instructions.md`, … in registered repos and points to `plan_save` / the store. Same for Cursor (`beforeShellExecution` cannot see file writes → rules + report check). | Closes the Superpowers gap (4.4); today only rules enforce "no AI files in the source repo" | 1–2 days |
+| 2 | **Serena wiring**: `setup-tools` adds the Serena MCP server (when `uv` is present) for Claude/Cursor/VS Code; `doctor` checks it | Layer 1 of the map is documented but not configured by the kit | 1 day |
+| 3 | **Live verification spike** on a real machine with Claude Code, Cursor and VS Code: plugin install + hooks in a real session, Cursor hook payload names, Copilot user-instruction loading, Serena start-up time on each stack | Several integrations are written to the docs but untested in the real tools | 2–3 days |
+| 4 | **Compile the Java and .NET samples** and the log4j2/NLog/MEL guides on a machine with JDK 17+/.NET 8 SDK; add the same redaction, size limits and repeat collapse that Node/Python have | Not compiled so far | 2–3 days |
+| 5 | **Pilot** on the Transfer project (Transactions, Core, Abs, Admin) with 2–3 developers for 2 weeks, git backend | Real numbers: tokens and time per question with and without maps, coverage growth, conflicts/stale entries, guard false positives, hook latency | 2 weeks |
+| 6 | Rollout guide: team onboarding (`project create` once, `init --all` per developer, `setup-tools`), store permissions, backup | After the pilot | 1 day |
 
 ## 8. Risks & mitigations
-- **Soft enforcement for Cursor/Copilot** (no CI in source) → Claude hooks + periodic reports + Cursor hooks spike.
-- **Wrong parent/merge detection** (branches created in the GitHub UI, squash merges) → GitHub API + manual `lineage set-parent` / `codemap merge`.
-- **Concurrent writes on the folder backend** → per-file maps + atomic writes + merge locks; recommend the git backend for teams > 5 people.
-- **Map drifting from code** → `sourceHash` + `stale` flag + reports.
-- **Superpowers writing plans into the source repo** → rules + a hook that moves the file; confirmed in the spike.
-- **Serena slow on large Java/.NET repos** → measured in the spike; fallback `codebase-memory-mcp`/`code-graph-mcp`.
-- **Knowledge store security** (maps describe customer code) → internal store, per-project permissions, never uploaded to external services.
+- **AI files written into the source repo** (Superpowers plans, rule files): rules today; `PreToolUse` deny in step 7.2-1.
+- **Soft map enforcement for Cursor/Copilot** (no Stop hook): rules, periodic report, pilot data.
+- **Copilot push protection is weaker** (no hooks): manual-approval setting, rules, and the pre-push hook when an agent marker is present.
+- **Repos using `core.hooksPath`** (husky) do not get layer 2 of the push guard: `doctor` reports it, and layers 1 and 3 still apply.
+- **Wrong parent/merge detection** (branches created in the GitHub UI, squash merges): GitHub API, `lineage set-parent`, manual `codemap merge`.
+- **Concurrent writes on the folder backend**: per-file maps, atomic writes, merge locks; recommend the git backend for teams > 5.
+- **Map drift**: `sourceHash`, the `stale` flag, reports.
+- **Store layout changed** in PR #4 (`maps/<repo>/<branch>`, `repos/<repo>/…`): stores made earlier must be recreated (none are in use).
+- **Java/.NET samples not compiled**: step 7.2-4.
+- **Serena slow on large Java/.NET repos**: measured in step 7.2-3; fallback `codebase-memory-mcp` / `code-graph-mcp`.
+- **Knowledge store security** (maps describe customer code): internal store, per-project permissions, never uploaded to external services.
 
 ## 9. Verification
-1. **Unit tests** for `core`: CRLF/LF-normalized hashing, index, missing/stale, branch name normalization, 3-way merge (all 3 rule branches), lineage — the same suite runs against both `GitStorage` and `FolderStorage`.
-2. **E2E on each fixture** (`fixtures/*-sample`), for each backend:
-   - After `codekit init`: `git status` of the source repo is **completely clean** (no new files, `.gitignore` untouched).
-   - Claude Code: a feature prompt touching 3–5 unmapped files → the Stop hook asks for maps; exactly those files appear in the store on the current map branch; the plan is in the store's `plans/`, not in the source repo.
-   - `git checkout -b feature/x` from main → the first MCP call creates `map/feature__x` from `map/main`, with lineage showing the correct parent/baseCommit.
-   - Edit the same file on main and feature/x → merge the PR (merge commit and squash) → `codemap sync` merges maps by the rules; non-matching entries get `stale: true`.
-   - Cursor and Copilot: `codemap_context`/`lookup`/`write` work via user-level MCP.
-   - Unregistered repo → plugin/hooks are no-ops.
-3. **Logging**: call a fixture API with and without `X-Correlation-Id` → every log line for the request has the same `correlationId` and `tags`; the header is propagated to downstream services.
-4. **Pilot**: compare tokens + time for the same set of questions (no map / Layer 1 / Layer 1 + Layer 2); coverage after 2 weeks; number of conflicts/stale entries per backend.
+1. **Automated (in place, `npm test`):**
+   - unit tests
+   - a storage contract suite run for both backends
+   - e2e for maps, branches, merges, conflicts, squash merges and hooks
+   - push guard: about 80 command cases, plus a real `pre-push` run with and without agent markers
+   - the read-only git allow-list
+   - GitHub detection (GET only)
+   - report and view
+   - setup-tools merging and backups
+   - logging detection and the log viewer
+   - multi-repo projects and parent folders
+   - Node and Python sample tests (`node --test`, `python -m unittest`)
+2. **Still to run (7.2-3/4/5):**
+   - in real Claude Code / Cursor / VS Code sessions: `git status` of every source repo stays clean; a feature prompt touching unmapped files ends with those maps in the store; plans land in the store
+   - every push attempt is blocked
+   - compile the Java and .NET samples
+   - pilot metrics: tokens and time per question (no map / Layer 1 / Layer 1 + 2), coverage after 2 weeks, conflicts and stale entries, hook latency in a parent folder with 4 repos
